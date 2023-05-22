@@ -25,6 +25,8 @@ mod test {
     use crate::attestations::{OracleMessage, PriceIntervalEntry, PriceValueEntry};
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
+    use crate::attestations::get_message_digest;
+    use bls::{SecretKey, Signature};
 
     #[tokio::test]
     async fn test_can_save_and_retrieve_data() {
@@ -36,7 +38,6 @@ mod test {
 
         let test_data_file = std::fs::File::open("./test_data/input/17292025.json").unwrap();
         let test_message: OracleMessage = serde_json::from_reader(test_data_file).unwrap();
-        println!("{:?}", test_message);
 
         let post_response = get_app_with_db_pool(pool.clone())
             .oneshot(
@@ -89,5 +90,131 @@ mod test {
         }
 
     }
+
+    #[tokio::test]
+    async fn test_rejects_invalid_signature_on_value_message() {
+        let test_db_url = "sqlite::memory:";
+        let pool = SqlitePool::connect(test_db_url).await.unwrap();
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await.expect("Failed to migrate database");
+
+        let test_data_file = std::fs::File::open("./test_data/input/17292025.json").unwrap();
+        let mut test_message: OracleMessage = serde_json::from_reader(test_data_file).unwrap();
+
+        test_message.value_message.signature = signature_from_random_signer(&test_message.value_message.message);
+
+        let post_response = get_app_with_db_pool(pool.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/post_oracle_message")
+                    .method("POST")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(serde_json::to_string(&test_message).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .expect("Request Failed");
+        assert_eq!(post_response.status(), 400);
+
+        let value_response = get_app_with_db_pool(pool.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/price_value_attestations")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("Request Failed");
+        assert_eq!(value_response.status(), 200);
+        let body = hyper::body::to_bytes(value_response.into_body()).await.unwrap();
+        let entries: Vec<PriceValueEntry> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(entries.len(), 0);
+
+        let interval_response = get_app_with_db_pool(pool)
+            .oneshot(
+                Request::builder()
+                    .uri("/price_interval_attestations")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("Request Failed");
+        assert_eq!(interval_response.status(), 200);
+        let body = hyper::body::to_bytes(interval_response.into_body()).await.unwrap();
+        let entries: Vec<PriceIntervalEntry> = serde_json::from_slice(&body).unwrap();
+        // Will not save any interval messages even though they are valid
+        // TODO: Review if this is intended behaviour
+        assert_eq!(entries.len(), 0);
+
+    }
+
+    #[tokio::test]
+    async fn test_rejects_invalid_signature_on_interval_message() {
+        let test_db_url = "sqlite::memory:";
+        let pool = SqlitePool::connect(test_db_url).await.unwrap();
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await.expect("Failed to migrate database");
+
+        let test_data_file = std::fs::File::open("./test_data/input/17292025.json").unwrap();
+        let mut test_message: OracleMessage = serde_json::from_reader(test_data_file).unwrap();
+
+        let message_index_to_alter = 42;
+        test_message.interval_inclusion_messages[message_index_to_alter].signature = signature_from_random_signer(&test_message.value_message.message);
+
+        let post_response = get_app_with_db_pool(pool.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/post_oracle_message")
+                    .method("POST")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(serde_json::to_string(&test_message).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .expect("Request Failed");
+        assert_eq!(post_response.status(), 400);
+
+        let value_response = get_app_with_db_pool(pool.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/price_value_attestations")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("Request Failed");
+        assert_eq!(value_response.status(), 200);
+        let body = hyper::body::to_bytes(value_response.into_body()).await.unwrap();
+        let entries: Vec<PriceValueEntry> = serde_json::from_slice(&body).unwrap();
+        // Note that it will still save the the value message, but not the interval message
+        // TODO: Review if this is intended behaviour
+        assert_eq!(entries.len(), 1);
+
+        let interval_response = get_app_with_db_pool(pool)
+            .oneshot(
+                Request::builder()
+                    .uri("/price_interval_attestations")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("Request Failed");
+        assert_eq!(interval_response.status(), 200);
+        let body = hyper::body::to_bytes(interval_response.into_body()).await.unwrap();
+        let entries: Vec<PriceIntervalEntry> = serde_json::from_slice(&body).unwrap();
+        // Saves all messages up to the invalid one
+        // TODO: Review if this is intended behaviour
+        assert_eq!(entries.len(), 42);
+
+    }
+
+    fn signature_from_random_signer<T: ssz::Encode>(message: &T) -> Signature {
+        let private_key = SecretKey::random();
+        let message_digest = get_message_digest(message);
+        private_key.sign(message_digest)
+    }
+
 
 }

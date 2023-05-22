@@ -43,20 +43,105 @@ mod test {
         AggregatePriceIntervalEntry, OracleMessage, PriceIntervalEntry, PriceValueEntry,
     };
     use axum::{body::Body, http::Request};
-    use bls::{SecretKey, Signature};
+    use bls::{AggregateSignature, SecretKey, Signature};
     use tower::ServiceExt;
 
-    #[tokio::test]
-    async fn can_save_first_submitted_message() {
+    async fn get_db_pool() -> SqlitePool {
         let test_db_url = "sqlite::memory:";
         let pool = SqlitePool::connect(test_db_url).await.unwrap();
         sqlx::migrate!("./migrations")
             .run(&pool)
             .await
             .expect("Failed to migrate database");
+        pool
+    }
 
+    fn get_test_message() -> OracleMessage {
         let test_data_file = std::fs::File::open("./test_data/input/17292025.json").unwrap();
-        let test_message: OracleMessage = serde_json::from_reader(test_data_file).unwrap();
+        serde_json::from_reader(test_data_file).unwrap()
+    }
+
+    fn sign_oracle_message_with_new_key(
+        mut message: OracleMessage,
+        private_key: &SecretKey,
+    ) -> OracleMessage {
+        message.validator_public_key = private_key.public_key();
+        message.value_message.signature =
+            sign_message(&message.value_message.message, &private_key);
+        for interval_message in message.interval_inclusion_messages.iter_mut() {
+            interval_message.signature = sign_message(&interval_message.message, &private_key);
+        }
+        message
+    }
+
+    #[tokio::test]
+    async fn can_aggregate_multiple_messages() {
+        let num_validators = 3;
+        let private_keys: Vec<SecretKey> =
+            (0..num_validators).map(|_| SecretKey::random()).collect();
+        let test_message = get_test_message();
+        let messages: Vec<OracleMessage> = private_keys
+            .iter()
+            .map(|private_key| sign_oracle_message_with_new_key(test_message.clone(), &private_key))
+            .collect();
+
+        let pool = get_db_pool().await;
+        for message in messages.iter() {
+            let post_response = get_app_with_db_pool(pool.clone())
+                .oneshot(
+                    Request::builder()
+                        .uri("/post_oracle_message")
+                        .method("POST")
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(serde_json::to_string(&message).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .expect("Request Failed");
+            assert_eq!(post_response.status(), 200);
+        }
+
+        let response = get_app_with_db_pool(pool)
+            .oneshot(
+                Request::builder()
+                    .uri("/aggregate_price_interval_attestations")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("Request Failed");
+        assert_eq!(response.status(), 200);
+
+        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+        let entries: Vec<AggregatePriceIntervalEntry> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            entries.len(),
+            test_message.interval_inclusion_messages.len()
+        );
+
+        for (i, entry) in entries.iter().enumerate() {
+            assert_eq!(
+                entry.slot_number,
+                test_message.interval_inclusion_messages[i]
+                    .message
+                    .slot_number as i64
+            );
+            let mut aggregate_signature = AggregateSignature::infinity();
+            messages.iter().for_each(|message| {
+                aggregate_signature.add_assign(&message.interval_inclusion_messages[i].signature)
+            });
+            assert_eq!(
+                entry.aggregate_signature,
+                hex::encode(aggregate_signature.serialize())
+            );
+            assert_eq!(entry.num_validators, num_validators);
+        }
+    }
+
+    #[tokio::test]
+    async fn can_save_first_submitted_message() {
+        let pool = get_db_pool().await;
+        let test_message = get_test_message();
 
         let post_response = get_app_with_db_pool(pool.clone())
             .oneshot(
@@ -171,15 +256,8 @@ mod test {
 
     #[tokio::test]
     async fn rejects_invalid_signature_on_value_message() {
-        let test_db_url = "sqlite::memory:";
-        let pool = SqlitePool::connect(test_db_url).await.unwrap();
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .expect("Failed to migrate database");
-
-        let test_data_file = std::fs::File::open("./test_data/input/17292025.json").unwrap();
-        let mut test_message: OracleMessage = serde_json::from_reader(test_data_file).unwrap();
+        let pool = get_db_pool().await;
+        let mut test_message = get_test_message();
 
         test_message.value_message.signature =
             signature_from_random_signer(&test_message.value_message.message);
@@ -234,15 +312,8 @@ mod test {
 
     #[tokio::test]
     async fn rejects_invalid_signature_on_interval_message() {
-        let test_db_url = "sqlite::memory:";
-        let pool = SqlitePool::connect(test_db_url).await.unwrap();
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .expect("Failed to migrate database");
-
-        let test_data_file = std::fs::File::open("./test_data/input/17292025.json").unwrap();
-        let mut test_message: OracleMessage = serde_json::from_reader(test_data_file).unwrap();
+        let pool = get_db_pool().await;
+        let mut test_message = get_test_message();
 
         let message_index_to_alter = 42;
         test_message.interval_inclusion_messages[message_index_to_alter].signature =
@@ -300,6 +371,10 @@ mod test {
 
     fn signature_from_random_signer<T: ssz::Encode>(message: &T) -> Signature {
         let private_key = SecretKey::random();
+        sign_message(message, &private_key)
+    }
+
+    fn sign_message<T: ssz::Encode>(message: &T, private_key: &SecretKey) -> Signature {
         let message_digest = get_message_digest(message);
         private_key.sign(message_digest)
     }

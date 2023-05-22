@@ -1,11 +1,11 @@
 use crate::state::AppState;
 use axum::{extract::State, Json};
-use serde::{Deserialize, Serialize};
 use bls::{Hash256, PublicKey, Signature};
-use std::sync::Arc;
-use ssz_derive::{Decode, Encode};
+use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use sqlx::SqlitePool;
+use ssz_derive::{Decode, Encode};
+use std::sync::Arc;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct PriceValueEntry {
@@ -61,7 +61,9 @@ pub struct SignedIntervalInclusionMessage {
     pub signature: Signature,
 }
 
-pub async fn get_price_value_attestations(State(state): State<Arc<AppState>>) -> Json<Vec<PriceValueEntry>> {
+pub async fn get_price_value_attestations(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<PriceValueEntry>> {
     let db_pool = &state.db_pool;
     let entries: Vec<PriceValueEntry> = sqlx::query!(
         "
@@ -88,7 +90,9 @@ pub async fn get_price_value_attestations(State(state): State<Arc<AppState>>) ->
     Json(entries)
 }
 
-pub async fn get_price_interval_attestations(State(state): State<Arc<AppState>>) -> Json<Vec<PriceIntervalEntry>> {
+pub async fn get_price_interval_attestations(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<PriceIntervalEntry>> {
     let db_pool = &state.db_pool;
     let entries: Vec<PriceIntervalEntry> = sqlx::query!(
         "
@@ -117,17 +121,32 @@ pub async fn get_price_interval_attestations(State(state): State<Arc<AppState>>)
     Json(entries)
 }
 
-
-pub async fn post_oracle_message(State(state): State<Arc<AppState>>, Json(message): Json<OracleMessage>) -> Result<(), axum::http::StatusCode> {
+pub async fn post_oracle_message(
+    State(state): State<Arc<AppState>>,
+    Json(message): Json<OracleMessage>,
+) -> Result<(), axum::http::StatusCode> {
     tracing::info!("Received oracle message: {:?}", message);
     let db_pool = &state.db_pool;
     let validator_public_key = message.validator_public_key;
-    save_price_value_attestation(db_pool, &message.value_message, &validator_public_key).await.map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
-    save_price_interval_attestations(db_pool, &message.interval_inclusion_messages, &validator_public_key).await.map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
+    // TODO: Improve error handling instead of returning "BAD REQUEST" for any kind of error
+    save_price_value_attestation(db_pool, &message.value_message, &validator_public_key)
+        .await
+        .map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
+    save_price_interval_attestations(
+        db_pool,
+        &message.interval_inclusion_messages,
+        &validator_public_key,
+    )
+    .await
+    .map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
     Ok(())
 }
 
-async fn save_price_value_attestation(db_pool: &SqlitePool, message: &SignedPriceValueMessage, validator_public_key: &PublicKey) -> eyre::Result<()>{
+async fn save_price_value_attestation(
+    db_pool: &SqlitePool,
+    message: &SignedPriceValueMessage,
+    validator_public_key: &PublicKey,
+) -> eyre::Result<()> {
     if !validate_message(validator_public_key, &message.message, &message.signature) {
         return Err(eyre::eyre!("Invalid signature"));
     }
@@ -156,18 +175,28 @@ async fn save_price_value_attestation(db_pool: &SqlitePool, message: &SignedPric
         value,
         slot_number,
         signature,
-    ).execute(db_pool).await?;
+    )
+    .execute(db_pool)
+    .await?;
     Ok(())
 }
 
-async fn save_price_interval_attestations(db_pool: &SqlitePool, messages: &Vec<SignedIntervalInclusionMessage>, validator_public_key: &PublicKey) -> eyre::Result<()>{
+async fn save_price_interval_attestations(
+    db_pool: &SqlitePool,
+    messages: &Vec<SignedIntervalInclusionMessage>,
+    validator_public_key: &PublicKey,
+) -> eyre::Result<()> {
     for message in messages {
         save_price_interval_attestation(db_pool, message, validator_public_key).await?;
     }
     Ok(())
 }
 
-async fn save_price_interval_attestation(db_pool: &SqlitePool, message: &SignedIntervalInclusionMessage, validator_public_key: &PublicKey) -> eyre::Result<()> {
+async fn save_price_interval_attestation(
+    db_pool: &SqlitePool,
+    message: &SignedIntervalInclusionMessage,
+    validator_public_key: &PublicKey,
+) -> eyre::Result<()> {
     if !validate_message(validator_public_key, &message.message, &message.signature) {
         return Err(eyre::eyre!("Invalid signature"));
     }
@@ -200,19 +229,22 @@ async fn save_price_interval_attestation(db_pool: &SqlitePool, message: &SignedI
         interval_size,
         slot_number,
         signature,
-    ).execute(db_pool).await?;
+    )
+    .execute(db_pool)
+    .await?;
     Ok(())
 }
 
-fn validate_message<T: ssz::Encode>(public_key: &PublicKey, message: &T, signature: &Signature)  -> bool {
+fn validate_message<T: ssz::Encode>(
+    public_key: &PublicKey,
+    message: &T,
+    signature: &Signature,
+) -> bool {
     let message_digest = get_message_digest(&message);
     signature.verify(public_key, message_digest)
 }
 
 pub fn get_message_digest<T: ssz::Encode>(message: &T) -> Hash256 {
     let message_ssz = message.as_ssz_bytes();
-    Hash256::from_slice(&Sha3_256::digest(message_ssz ))
+    Hash256::from_slice(&Sha3_256::digest(message_ssz))
 }
-
-
-

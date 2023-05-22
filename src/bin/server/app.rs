@@ -34,7 +34,7 @@ mod test {
             .run(&pool)
             .await.expect("Failed to migrate database");
 
-        let test_data_file = std::fs::File::open("./test_data/17292025.json").unwrap();
+        let test_data_file = std::fs::File::open("./test_data/input/17292025.json").unwrap();
         let test_message: OracleMessage = serde_json::from_reader(test_data_file).unwrap();
         println!("{:?}", test_message);
 

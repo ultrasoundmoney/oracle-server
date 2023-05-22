@@ -1,9 +1,10 @@
 use crate::state::AppState;
 use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
-use bls::{PublicKey, Signature};
+use bls::{Hash256, PublicKey, Signature};
 use std::sync::Arc;
 use ssz_derive::{Decode, Encode};
+use sha3::{Digest, Sha3_256};
 use sqlx::SqlitePool;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -120,15 +121,17 @@ pub async fn get_price_interval_attestations(State(state): State<Arc<AppState>>)
 pub async fn post_oracle_message(State(state): State<Arc<AppState>>, Json(message): Json<OracleMessage>) {
     tracing::info!("Received oracle message: {:?}", message);
     let db_pool = &state.db_pool;
-    let validator_public_key = message.validator_public_key.to_string();
-    save_price_value_attestation(db_pool, &message.value_message, validator_public_key.clone()).await;
+    let validator_public_key = message.validator_public_key;
+    save_price_value_attestation(db_pool, &message.value_message, &validator_public_key).await;
     save_price_interval_attestations(db_pool, &message.interval_inclusion_messages, &validator_public_key).await;
 }
 
-async fn save_price_value_attestation(db_pool: &SqlitePool, message: &SignedPriceValueMessage, validator_public_key: String) {
+async fn save_price_value_attestation(db_pool: &SqlitePool, message: &SignedPriceValueMessage, validator_public_key: &PublicKey) {
+    validate_message(validator_public_key, &message.message, &message.signature).await;
     let value = message.message.price.value.to_string();
     let slot_number = message.message.slot_number.to_string();
     let signature = message.signature.to_string();
+    let pk_string = validator_public_key.to_string();
 
     // Save price_value_message in DB
     sqlx::query!(
@@ -146,24 +149,26 @@ async fn save_price_value_attestation(db_pool: &SqlitePool, message: &SignedPric
             ?4
         );
         ",
-        validator_public_key,
+        pk_string,
         value,
         slot_number,
         signature,
     ).execute(db_pool).await.unwrap();
 }
 
-async fn save_price_interval_attestations(db_pool: &SqlitePool, messages: &Vec<SignedIntervalInclusionMessage>, validator_public_key: &str) {
+async fn save_price_interval_attestations(db_pool: &SqlitePool, messages: &Vec<SignedIntervalInclusionMessage>, validator_public_key: &PublicKey) {
     for message in messages {
         save_price_interval_attestation(db_pool, message, validator_public_key).await;
     }
 }
 
-async fn save_price_interval_attestation(db_pool: &SqlitePool, message: &SignedIntervalInclusionMessage, validator_public_key: &str) {
+async fn save_price_interval_attestation(db_pool: &SqlitePool, message: &SignedIntervalInclusionMessage, validator_public_key: &PublicKey) {
+    validate_message(validator_public_key, &message.message, &message.signature).await;
     let value = message.message.value.to_string();
     let interval_size = message.message.interval_size.to_string();
     let slot_number = message.message.slot_number.to_string();
     let signature = message.signature.to_string();
+    let pk_string = validator_public_key.to_string();
 
     // Save price_value_message in DB
     sqlx::query!(
@@ -183,12 +188,18 @@ async fn save_price_interval_attestation(db_pool: &SqlitePool, message: &SignedI
             ?5
         );
         ",
-        validator_public_key,
+        pk_string,
         value,
         interval_size,
         slot_number,
         signature,
     ).execute(db_pool).await.unwrap();
+}
+
+async fn validate_message<T: ssz::Encode>(public_key: &PublicKey, message: &T, signature: &Signature)  -> bool {
+    let message_ssz = message.as_ssz_bytes();
+    let message_digest = Hash256::from_slice(&Sha3_256::digest(message_ssz));
+    signature.verify(public_key, message_digest)
 }
 
 

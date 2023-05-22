@@ -4,12 +4,23 @@ use serde::{Deserialize, Serialize};
 use bls::{PublicKey, Signature};
 use std::sync::Arc;
 use ssz_derive::{Decode, Encode};
+use sqlx::SqlitePool;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct PriceValueEntry {
     pub validator_public_key: String,
     pub value: i64,
     pub slot_number: i64,
+    pub signature: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct PriceIntervalEntry {
+    pub validator_public_key: String,
+    pub value: i64,
+    pub slot_number: i64,
+    pub signature: String,
+    pub interval_size: i64,
 }
 
 #[derive(Clone, Debug, Encode, Decode, Serialize, Deserialize)]
@@ -51,12 +62,13 @@ pub struct SignedIntervalInclusionMessage {
 
 pub async fn get_price_value_attestations(State(state): State<Arc<AppState>>) -> Json<Vec<PriceValueEntry>> {
     let db_pool = &state.db_pool;
-    let contracts: Vec<PriceValueEntry> = sqlx::query!(
+    let entries: Vec<PriceValueEntry> = sqlx::query!(
         "
         SELECT
             validator_public_key,
             value,
-            slot_number
+            slot_number,
+            signature
         FROM
             price_value_attestations;
         "
@@ -68,12 +80,115 @@ pub async fn get_price_value_attestations(State(state): State<Arc<AppState>>) ->
     .map(|row| PriceValueEntry {
         validator_public_key: row.validator_public_key,
         value: row.value,
-        slot_number: row.slot_number
+        slot_number: row.slot_number,
+        signature: row.signature,
     })
     .collect();
-    Json(contracts)
+    Json(entries)
 }
+
+pub async fn get_price_interval_attestations(State(state): State<Arc<AppState>>) -> Json<Vec<PriceIntervalEntry>> {
+    let db_pool = &state.db_pool;
+    let entries: Vec<PriceIntervalEntry> = sqlx::query!(
+        "
+        SELECT
+            validator_public_key,
+            value,
+            slot_number,
+            signature,
+            interval_size
+        FROM
+            price_interval_attestations;
+        "
+    )
+    .fetch_all(db_pool)
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| PriceIntervalEntry {
+        validator_public_key: row.validator_public_key,
+        value: row.value,
+        slot_number: row.slot_number,
+        signature: row.signature,
+        interval_size: row.interval_size,
+    })
+    .collect();
+    Json(entries)
+}
+
 
 pub async fn post_oracle_message(State(state): State<Arc<AppState>>, Json(message): Json<OracleMessage>) {
     tracing::info!("Received oracle message: {:?}", message);
+    let db_pool = &state.db_pool;
+    let validator_public_key = message.validator_public_key.to_string();
+    save_price_value_attestation(db_pool, &message.value_message, validator_public_key.clone()).await;
+    save_price_interval_attestations(db_pool, &message.interval_inclusion_messages, &validator_public_key).await;
 }
+
+async fn save_price_value_attestation(db_pool: &SqlitePool, message: &SignedPriceValueMessage, validator_public_key: String) {
+    let value = message.message.price.value.to_string();
+    let slot_number = message.message.slot_number.to_string();
+    let signature = message.signature.to_string();
+
+    // Save price_value_message in DB
+    sqlx::query!(
+        "
+        INSERT INTO price_value_attestations(
+            validator_public_key,
+            value,
+            slot_number,
+            signature
+        )
+        VALUES (
+            ?1,
+            ?2,
+            ?3,
+            ?4
+        );
+        ",
+        validator_public_key,
+        value,
+        slot_number,
+        signature,
+    ).execute(db_pool).await.unwrap();
+}
+
+async fn save_price_interval_attestations(db_pool: &SqlitePool, messages: &Vec<SignedIntervalInclusionMessage>, validator_public_key: &str) {
+    for message in messages {
+        save_price_interval_attestation(db_pool, message, validator_public_key).await;
+    }
+}
+
+async fn save_price_interval_attestation(db_pool: &SqlitePool, message: &SignedIntervalInclusionMessage, validator_public_key: &str) {
+    let value = message.message.value.to_string();
+    let interval_size = message.message.interval_size.to_string();
+    let slot_number = message.message.slot_number.to_string();
+    let signature = message.signature.to_string();
+
+    // Save price_value_message in DB
+    sqlx::query!(
+        "
+        INSERT INTO price_interval_attestations(
+            validator_public_key,
+            value,
+            interval_size,
+            slot_number,
+            signature
+        )
+        VALUES (
+            ?1,
+            ?2,
+            ?3,
+            ?4,
+            ?5
+        );
+        ",
+        validator_public_key,
+        value,
+        interval_size,
+        slot_number,
+        signature,
+    ).execute(db_pool).await.unwrap();
+}
+
+

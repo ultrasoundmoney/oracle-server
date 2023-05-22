@@ -1,4 +1,4 @@
-use crate::attestations::{get_price_value_attestations, post_oracle_message};
+use crate::attestations::{get_price_interval_attestations, get_price_value_attestations, post_oracle_message};
 use crate::db::get_db_pool;
 use crate::state::AppState;
 use axum::{routing::{get, post}, Router};
@@ -14,6 +14,7 @@ fn get_app_with_db_pool(db_pool: SqlitePool) -> Router {
     let shared_state = Arc::new(AppState { db_pool });
     Router::new()
         .route("/price_value_attestations", get(get_price_value_attestations))
+        .route("/price_interval_attestations", get(get_price_interval_attestations))
         .route("/post_oracle_message", post(post_oracle_message))
         .with_state(shared_state)
 }

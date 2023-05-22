@@ -1,7 +1,7 @@
-use crate::attestations::get_price_value_attestations;
+use crate::attestations::{get_price_value_attestations, post_oracle_message};
 use crate::db::get_db_pool;
 use crate::state::AppState;
-use axum::{routing::get, Router};
+use axum::{routing::{get, post}, Router};
 use sqlx::SqlitePool;
 use std::sync::Arc;
 
@@ -13,7 +13,8 @@ pub async fn get_app() -> Router {
 fn get_app_with_db_pool(db_pool: SqlitePool) -> Router {
     let shared_state = Arc::new(AppState { db_pool });
     Router::new()
-        .route("/v1/top-contracts", get(get_price_value_attestations))
+        .route("/price_value_attestations", get(get_price_value_attestations))
+        .route("/post_oracle_message", post(post_oracle_message))
         .with_state(shared_state)
 }
 
@@ -30,7 +31,7 @@ mod test {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/v1/top-contracts")
+                    .uri("/price_value_attestations")
                     .body(Body::empty())
                     .unwrap(),
             )

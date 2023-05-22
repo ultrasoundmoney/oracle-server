@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 mod app;
-mod contract_leaderboard;
+mod attestations;
 mod db;
 mod env;
 mod state;

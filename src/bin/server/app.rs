@@ -22,14 +22,36 @@ fn get_app_with_db_pool(db_pool: SqlitePool) -> Router {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::attestations::PriceValueEntry;
+    use crate::attestations::{OracleMessage, PriceIntervalEntry, PriceValueEntry};
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
 
     #[tokio::test]
-    async fn test_get_contracts_against_dev_db() {
-        let app = get_app().await;
-        let response = app
+    async fn test_can_save_and_retrieve_data() {
+        let test_db_url = "sqlite::memory:";
+        let pool = SqlitePool::connect(test_db_url).await.unwrap();
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await.expect("Failed to migrate database");
+
+        let test_data_file = std::fs::File::open("./test_data/17292025.json").unwrap();
+        let test_message: OracleMessage = serde_json::from_reader(test_data_file).unwrap();
+        println!("{:?}", test_message);
+
+        let post_response = get_app_with_db_pool(pool.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/post_oracle_message")
+                    .method("POST")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(serde_json::to_string(&test_message).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .expect("Request Failed");
+        assert_eq!(post_response.status(), 200);
+
+        let value_response = get_app_with_db_pool(pool.clone())
             .oneshot(
                 Request::builder()
                     .uri("/price_value_attestations")
@@ -38,14 +60,34 @@ mod test {
             )
             .await
             .expect("Request Failed");
-        assert_eq!(response.status(), 200);
-        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
-        let contracts: Vec<PriceValueEntry> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(contracts.len(), 100);
+        assert_eq!(value_response.status(), 200);
+        let body = hyper::body::to_bytes(value_response.into_body()).await.unwrap();
+        let entries: Vec<PriceValueEntry> = serde_json::from_slice(&body).unwrap();
 
-        for contract in contracts {
-            assert!(contract.validator_public_key.len() > 0);
-            assert!(contract.value > 0);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].value, test_message.value_message.message.price.value as i64);
+        assert_eq!(entries[0].slot_number, test_message.value_message.message.slot_number as i64);
+        assert_eq!(entries[0].validator_public_key, test_message.validator_public_key.to_string());
+
+        let interval_response = get_app_with_db_pool(pool)
+            .oneshot(
+                Request::builder()
+                    .uri("/price_interval_attestations")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("Request Failed");
+        assert_eq!(interval_response.status(), 200);
+        let body = hyper::body::to_bytes(interval_response.into_body()).await.unwrap();
+        let entries: Vec<PriceIntervalEntry> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(entries.len(), test_message.interval_inclusion_messages.len());
+
+        for (i, entry) in entries.iter().enumerate() {
+            assert_eq!(entry.slot_number, test_message.interval_inclusion_messages[i].message.slot_number as i64);
+            assert_eq!(entry.validator_public_key, test_message.validator_public_key.to_string());
         }
+
     }
+
 }

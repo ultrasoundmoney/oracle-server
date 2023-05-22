@@ -1,6 +1,6 @@
 use crate::state::AppState;
 use axum::{extract::State, Json};
-use bls::{Hash256, PublicKey, Signature};
+use bls::{AggregateSignature, Hash256, PublicKey, Signature};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use sqlx::SqlitePool;
@@ -232,6 +232,103 @@ async fn save_price_interval_attestation(
     )
     .execute(db_pool)
     .await?;
+
+    extend_or_create_aggregate_interval_attestation(db_pool, message).await?;
+    Ok(())
+}
+
+async fn extend_or_create_aggregate_interval_attestation(
+    db_pool: &SqlitePool,
+    message: &SignedIntervalInclusionMessage,
+) -> eyre::Result<()> {
+    let interval_size = message.message.interval_size.to_string();
+    let slot_number = message.message.slot_number.to_string();
+    let value = message.message.value.to_string();
+    let (new_num_validators, mut aggregate_signature) = if let Some(entry) = sqlx::query!(
+        "
+        SELECT
+            num_validators,
+            aggregate_signature
+        FROM
+            aggregated_interval_attestations
+        WHERE
+            interval_size = ?1
+        AND
+            slot_number = ?2
+        AND
+            value = ?3;
+        ",
+        interval_size,
+        slot_number,
+        value,
+    )
+    .fetch_optional(db_pool)
+    .await?
+    {
+        (
+            entry.num_validators + 1,
+            AggregateSignature::deserialize(&hex::decode(entry.aggregate_signature)?)
+                .map_err(|_| eyre::eyre!("Invalid aggregate signature in DB"))?,
+        )
+    } else {
+        (1, AggregateSignature::infinity())
+    };
+
+    aggregate_signature.add_assign(&message.signature);
+    let new_aggregate_signature = hex::encode(aggregate_signature.serialize());
+
+    if new_num_validators == 1 {
+        // Create new db entry
+        sqlx::query!(
+            "
+            INSERT INTO aggregated_interval_attestations(
+                value,
+                interval_size,
+                slot_number,
+                num_validators,
+                aggregate_signature
+            )
+            VALUES (
+                ?1,
+                ?2,
+                ?3,
+                ?4,
+                ?5
+            );
+            ",
+            value,
+            interval_size,
+            slot_number,
+            new_num_validators,
+            new_aggregate_signature,
+        )
+        .execute(db_pool)
+        .await?;
+    } else {
+        // Update existing db entry
+        sqlx::query!(
+            "
+            UPDATE aggregated_interval_attestations
+            SET
+                num_validators = ?1,
+                aggregate_signature = ?2
+            WHERE
+                interval_size = ?3
+            AND
+                slot_number = ?4
+            AND
+                value = ?5;
+            ",
+            new_num_validators,
+            new_aggregate_signature,
+            interval_size,
+            slot_number,
+            value,
+        )
+        .execute(db_pool)
+        .await?;
+    }
+
     Ok(())
 }
 

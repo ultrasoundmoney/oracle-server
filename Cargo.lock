@@ -1259,6 +1259,7 @@ dependencies = [
  "eth2_ssz_derive",
  "ethereum_ssz",
  "eyre",
+ "hex",
  "hyper",
  "serde",
  "serde_json",

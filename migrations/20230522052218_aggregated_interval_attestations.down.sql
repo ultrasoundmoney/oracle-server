@@ -1,2 +1,2 @@
 -- Add down migration script here
-DROP TABLE aggregated_interval_attestations;
+DROP TABLE aggregate_interval_attestations;

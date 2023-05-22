@@ -1,5 +1,6 @@
 use crate::attestations::{
-    get_price_interval_attestations, get_price_value_attestations, post_oracle_message,
+    get_aggregate_price_interval_attestations, get_price_interval_attestations,
+    get_price_value_attestations, post_oracle_message,
 };
 use crate::db::get_db_pool;
 use crate::state::AppState;
@@ -19,6 +20,10 @@ fn get_app_with_db_pool(db_pool: SqlitePool) -> Router {
     let shared_state = Arc::new(AppState { db_pool });
     Router::new()
         .route(
+            "/aggregate_price_interval_attestations",
+            get(get_aggregate_price_interval_attestations),
+        )
+        .route(
             "/price_value_attestations",
             get(get_price_value_attestations),
         )
@@ -34,13 +39,15 @@ fn get_app_with_db_pool(db_pool: SqlitePool) -> Router {
 mod test {
     use super::*;
     use crate::attestations::get_message_digest;
-    use crate::attestations::{OracleMessage, PriceIntervalEntry, PriceValueEntry};
+    use crate::attestations::{
+        AggregatePriceIntervalEntry, OracleMessage, PriceIntervalEntry, PriceValueEntry,
+    };
     use axum::{body::Body, http::Request};
     use bls::{SecretKey, Signature};
     use tower::ServiceExt;
 
     #[tokio::test]
-    async fn test_can_save_and_retrieve_data() {
+    async fn can_save_first_submitted_message() {
         let test_db_url = "sqlite::memory:";
         let pool = SqlitePool::connect(test_db_url).await.unwrap();
         sqlx::migrate!("./migrations")
@@ -93,7 +100,7 @@ mod test {
             test_message.validator_public_key.to_string()
         );
 
-        let interval_response = get_app_with_db_pool(pool)
+        let interval_response = get_app_with_db_pool(pool.clone())
             .oneshot(
                 Request::builder()
                     .uri("/price_interval_attestations")
@@ -124,10 +131,46 @@ mod test {
                 test_message.validator_public_key.to_string()
             );
         }
+
+        let response = get_app_with_db_pool(pool)
+            .oneshot(
+                Request::builder()
+                    .uri("/aggregate_price_interval_attestations")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("Request Failed");
+        assert_eq!(response.status(), 200);
+
+        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+        let entries: Vec<AggregatePriceIntervalEntry> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            entries.len(),
+            test_message.interval_inclusion_messages.len()
+        );
+
+        for (i, entry) in entries.iter().enumerate() {
+            assert_eq!(
+                entry.slot_number,
+                test_message.interval_inclusion_messages[i]
+                    .message
+                    .slot_number as i64
+            );
+            assert_eq!(
+                entry.aggregate_signature,
+                hex::encode(
+                    test_message.interval_inclusion_messages[i]
+                        .signature
+                        .serialize()
+                )
+            );
+            assert_eq!(entry.num_validators, 1);
+        }
     }
 
     #[tokio::test]
-    async fn test_rejects_invalid_signature_on_value_message() {
+    async fn rejects_invalid_signature_on_value_message() {
         let test_db_url = "sqlite::memory:";
         let pool = SqlitePool::connect(test_db_url).await.unwrap();
         sqlx::migrate!("./migrations")
@@ -190,7 +233,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_rejects_invalid_signature_on_interval_message() {
+    async fn rejects_invalid_signature_on_interval_message() {
         let test_db_url = "sqlite::memory:";
         let pool = SqlitePool::connect(test_db_url).await.unwrap();
         sqlx::migrate!("./migrations")

@@ -24,6 +24,15 @@ pub struct PriceIntervalEntry {
     pub interval_size: i64,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AggregatePriceIntervalEntry {
+    pub value: i64,
+    pub slot_number: i64,
+    pub aggregate_signature: String,
+    pub interval_size: i64,
+    pub num_validators: i64,
+}
+
 #[derive(Clone, Debug, Encode, Decode, Serialize, Deserialize)]
 pub struct Price {
     pub value: u64, // TODO: Check if we need to add further info here such as timestamp
@@ -85,6 +94,37 @@ pub async fn get_price_value_attestations(
         value: row.value,
         slot_number: row.slot_number,
         signature: row.signature,
+    })
+    .collect();
+    Json(entries)
+}
+
+pub async fn get_aggregate_price_interval_attestations(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<AggregatePriceIntervalEntry>> {
+    let db_pool = &state.db_pool;
+    let entries: Vec<AggregatePriceIntervalEntry> = sqlx::query!(
+        "
+        SELECT
+            value,
+            slot_number,
+            aggregate_signature,
+            interval_size,
+            num_validators
+        FROM
+            aggregate_interval_attestations 
+        "
+    )
+    .fetch_all(db_pool)
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| AggregatePriceIntervalEntry {
+        value: row.value,
+        slot_number: row.slot_number,
+        aggregate_signature: row.aggregate_signature,
+        interval_size: row.interval_size,
+        num_validators: row.num_validators,
     })
     .collect();
     Json(entries)
@@ -233,6 +273,7 @@ async fn save_price_interval_attestation(
     .execute(db_pool)
     .await?;
 
+    // TODO: Review if we really want to aggregate every time we receive a new message
     extend_or_create_aggregate_interval_attestation(db_pool, message).await?;
     Ok(())
 }
@@ -250,7 +291,7 @@ async fn extend_or_create_aggregate_interval_attestation(
             num_validators,
             aggregate_signature
         FROM
-            aggregated_interval_attestations
+            aggregate_interval_attestations
         WHERE
             interval_size = ?1
         AND
@@ -281,7 +322,7 @@ async fn extend_or_create_aggregate_interval_attestation(
         // Create new db entry
         sqlx::query!(
             "
-            INSERT INTO aggregated_interval_attestations(
+            INSERT INTO aggregate_interval_attestations(
                 value,
                 interval_size,
                 slot_number,
@@ -308,7 +349,7 @@ async fn extend_or_create_aggregate_interval_attestation(
         // Update existing db entry
         sqlx::query!(
             "
-            UPDATE aggregated_interval_attestations
+            UPDATE aggregate_interval_attestations
             SET
                 num_validators = ?1,
                 aggregate_signature = ?2

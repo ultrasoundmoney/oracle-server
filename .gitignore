@@ -1,5 +1,5 @@
 /target
 .env
-*.db
+*.db*
 test_data/*
 !test_data/input

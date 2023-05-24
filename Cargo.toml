@@ -25,6 +25,7 @@ sha3 = "0.10.8"
 eyre = "0.6.8"
 hex = "0.4.3"
 itertools = "0.10.5"
+bytes = "1.4.0"
 
 [dev-dependencies]
 hyper = { version = "0.14", features = ["full"] }

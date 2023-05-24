@@ -1,7 +1,10 @@
 use crate::state::AppState;
-use itertools::Itertools;
-use axum::{extract::{Query, State}, Json};
+use axum::{
+    extract::{Query, State},
+    Json,
+};
 use bls::{AggregatePublicKey, AggregateSignature, Hash256, PublicKey, Signature};
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use sqlx::SqlitePool;
@@ -114,25 +117,40 @@ pub async fn get_price_aggregate(
     let db_pool = &state.db_pool;
     tracing::debug!("Query: {:?}", query);
     // TODO: Improve error / none handling - remove unwrap
-    let slot_number = query.slot_number.unwrap_or(get_slot_number(db_pool).await.map_err(|e| {
-        tracing::error!("Error getting slot number: {:?}", e);
-        axum::http::StatusCode::INTERNAL_SERVER_ERROR
-    })?.unwrap());
+    let slot_number = query.slot_number.unwrap_or(
+        get_slot_number(db_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Error getting slot number: {:?}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?
+            .unwrap(),
+    );
 
-    let interval_size = query.interval_size.unwrap_or(get_most_common_interval_size(db_pool, slot_number).await.map_err(|e| {
-        tracing::error!("Error getting most common interval size: {:?}", e);
-        axum::http::StatusCode::INTERNAL_SERVER_ERROR
-    })?.unwrap());
+    let interval_size = query.interval_size.unwrap_or(
+        get_most_common_interval_size(db_pool, slot_number)
+            .await
+            .map_err(|e| {
+                tracing::error!("Error getting most common interval size: {:?}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?
+            .unwrap(),
+    );
 
-    let aggregate_price = get_price_aggregate_for_params(db_pool, slot_number, interval_size).await.map_err(|e| {
-        tracing::error!("Error getting aggregate price: {:?}", e);
-        axum::http::StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let aggregate_price = get_price_aggregate_for_params(db_pool, slot_number, interval_size)
+        .await
+        .map_err(|e| {
+            tracing::error!("Error getting aggregate price: {:?}", e);
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     Ok(Json(aggregate_price))
 }
 
-async fn get_most_common_interval_size(db_pool: &SqlitePool, slot_number: i64) -> eyre::Result<Option<i64>> {
+async fn get_most_common_interval_size(
+    db_pool: &SqlitePool,
+    slot_number: i64,
+) -> eyre::Result<Option<i64>> {
     let slot_number = slot_number.to_string();
     let interval_size = sqlx::query!(
         "
@@ -174,7 +192,11 @@ async fn get_slot_number(db_pool: &SqlitePool) -> eyre::Result<Option<i64>> {
     Ok(slot_number)
 }
 
-async fn get_price_aggregate_for_params(db_pool: &SqlitePool, slot_number: i64, interval_size: i64) -> eyre::Result<AggregatePriceIntervalEntry> {
+async fn get_price_aggregate_for_params(
+    db_pool: &SqlitePool,
+    slot_number: i64,
+    interval_size: i64,
+) -> eyre::Result<AggregatePriceIntervalEntry> {
     let slot_number = slot_number.to_string();
     let interval_size = interval_size.to_string();
     let entries: Vec<AggregatePriceIntervalEntry> = sqlx::query!(
@@ -212,12 +234,14 @@ async fn get_price_aggregate_for_params(db_pool: &SqlitePool, slot_number: i64, 
     let max_num_validators = entries
         .iter()
         .map(|entry| entry.num_validators)
-        .max().ok_or(eyre::eyre!("No entries found"))?;
-    let entries_with_max_num_validators_ordered_by_value: Vec<AggregatePriceIntervalEntry> = entries
-        .into_iter()
-        .filter(|entry| entry.num_validators == max_num_validators)
-        .sorted_by(|a, b| Ord::cmp(&a.value, &b.value))
-        .collect();
+        .max()
+        .ok_or(eyre::eyre!("No entries found"))?;
+    let entries_with_max_num_validators_ordered_by_value: Vec<AggregatePriceIntervalEntry> =
+        entries
+            .into_iter()
+            .filter(|entry| entry.num_validators == max_num_validators)
+            .sorted_by(|a, b| Ord::cmp(&a.value, &b.value))
+            .collect();
 
     let median_index = entries_with_max_num_validators_ordered_by_value.len() / 2;
     let median_entry = entries_with_max_num_validators_ordered_by_value[median_index].clone();
@@ -413,8 +437,9 @@ async fn extend_or_create_aggregate_interval_attestation(
     let interval_size = message.message.interval_size.to_string();
     let slot_number = message.message.slot_number.to_string();
     let value = message.message.value.to_string();
-    let (new_num_validators, mut aggregate_signature, aggregate_public_key) = if let Some(entry) = sqlx::query!(
-        "
+    let (new_num_validators, mut aggregate_signature, aggregate_public_key) = if let Some(entry) =
+        sqlx::query!(
+            "
         SELECT
             num_validators,
             aggregate_signature,
@@ -428,22 +453,31 @@ async fn extend_or_create_aggregate_interval_attestation(
         AND
             value = ?3;
         ",
-        interval_size,
-        slot_number,
-        value,
-    )
-    .fetch_optional(db_pool)
-    .await?
+            interval_size,
+            slot_number,
+            value,
+        )
+        .fetch_optional(db_pool)
+        .await?
     {
         (
             entry.num_validators + 1,
             AggregateSignature::deserialize(&hex::decode(entry.aggregate_signature)?)
                 .map_err(|_| eyre::eyre!("Invalid aggregate signature in DB"))?,
-            AggregatePublicKey::aggregate(&[PublicKey::deserialize(&hex::decode(entry.aggregate_public_key)?).map_err(|_| eyre::eyre!("Invalid aggregate public key in DB"))?, validator_public_key.clone()]).map_err(|_| eyre::eyre!("Invalid aggregate public key in DB"))?,
-
+            AggregatePublicKey::aggregate(&[
+                PublicKey::deserialize(&hex::decode(entry.aggregate_public_key)?)
+                    .map_err(|_| eyre::eyre!("Invalid aggregate public key in DB"))?,
+                validator_public_key.clone(),
+            ])
+            .map_err(|_| eyre::eyre!("Invalid aggregate public key in DB"))?,
         )
     } else {
-        (1, AggregateSignature::infinity(), AggregatePublicKey::aggregate(&[validator_public_key.clone()]).map_err(|_| eyre::eyre!("Invalid aggregate public key"))?)
+        (
+            1,
+            AggregateSignature::infinity(),
+            AggregatePublicKey::aggregate(&[validator_public_key.clone()])
+                .map_err(|_| eyre::eyre!("Invalid aggregate public key"))?,
+        )
     };
 
     aggregate_signature.add_assign(&message.signature);

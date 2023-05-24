@@ -1,7 +1,6 @@
 use crate::attestations::{
-    get_aggregate_price_interval_attestations, get_price_interval_attestations,
-    get_price_value_attestations, post_oracle_message,
-    get_price_aggregate,
+    get_aggregate_price_interval_attestations, get_price_aggregate,
+    get_price_interval_attestations, get_price_value_attestations, post_oracle_message,
 };
 use crate::db::get_db_pool;
 use crate::state::AppState;
@@ -33,10 +32,7 @@ fn get_app_with_db_pool(db_pool: SqlitePool) -> Router {
             get(get_price_interval_attestations),
         )
         .route("/post_oracle_message", post(post_oracle_message))
-        .route(
-            "/price_aggregate",
-            get(get_price_aggregate),
-        )
+        .route("/price_aggregate", get(get_price_aggregate))
         .with_state(shared_state)
 }
 
@@ -47,8 +43,12 @@ mod test {
     use crate::attestations::{
         AggregatePriceIntervalEntry, OracleMessage, PriceIntervalEntry, PriceValueEntry,
     };
-    use axum::{body::Body, http::Request};
+    use axum::{
+        body::Body,
+        http::Request,
+    };
     use bls::{AggregateSignature, SecretKey, Signature};
+    use bytes::Bytes;
     use tower::ServiceExt;
 
     async fn get_db_pool() -> SqlitePool {
@@ -59,6 +59,53 @@ mod test {
             .await
             .expect("Failed to migrate database");
         pool
+    }
+
+    enum TestRequest {
+        Get(),
+        Post(Body),
+    }
+    struct TestApp {
+        db_pool: SqlitePool,
+    }
+
+    impl TestApp {
+        pub async fn new() -> Self {
+            let db_pool = get_db_pool().await;
+            TestApp { db_pool }
+        }
+
+        pub async fn get(&self, uri: &str, expected_code: u16) -> Bytes {
+            self.send_request(TestRequest::Get(), uri, expected_code)
+                .await
+        }
+
+        pub async fn post(&self, uri: &str, body: Body, expected_code: u16) -> Bytes {
+            self.send_request(TestRequest::Post(body), uri, expected_code)
+                .await
+        }
+
+        async fn send_request(&self, request: TestRequest, uri: &str, expected_code: u16) -> Bytes {
+            let app = get_app_with_db_pool(self.db_pool.clone());
+            let req = match request {
+                TestRequest::Get() => Request::builder()
+                    .uri(uri)
+                    .method("GET")
+                    .body(Body::empty())
+                    .unwrap(),
+                TestRequest::Post(body) => Request::builder()
+                    .uri(uri)
+                    .method("POST")
+                    .header("Content-Type", "application/json")
+                    .body(body)
+                    .unwrap(),
+            };
+
+            let response = app.oneshot(req).await.unwrap();
+            assert_eq!(response.status().as_u16(), expected_code);
+            let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+            body
+        }
     }
 
     fn get_test_message() -> OracleMessage {
@@ -90,35 +137,19 @@ mod test {
             .map(|private_key| sign_oracle_message_with_new_key(test_message.clone(), &private_key))
             .collect();
 
-        let pool = get_db_pool().await;
+        let test_app = TestApp::new().await;
         for message in messages.iter() {
-            let post_response = get_app_with_db_pool(pool.clone())
-                .oneshot(
-                    Request::builder()
-                        .uri("/post_oracle_message")
-                        .method("POST")
-                        .header("Content-Type", "application/json")
-                        .body(Body::from(serde_json::to_string(&message).unwrap()))
-                        .unwrap(),
+            test_app
+                .post(
+                    "/post_oracle_message",
+                    Body::from(serde_json::to_string(&message).unwrap()),
+                    200,
                 )
-                .await
-                .expect("Request Failed");
-            assert_eq!(post_response.status(), 200);
+                .await;
         }
 
-        let response = get_app_with_db_pool(pool)
-            .oneshot(
-                Request::builder()
-                    .uri("/aggregate_price_interval_attestations")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .expect("Request Failed");
-        assert_eq!(response.status(), 200);
-
-        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
-        let entries: Vec<AggregatePriceIntervalEntry> = serde_json::from_slice(&body).unwrap();
+        let response = test_app.get("/aggregate_price_interval_attestations", 200).await;
+        let entries: Vec<AggregatePriceIntervalEntry> = serde_json::from_slice(&response).unwrap();
         assert_eq!(
             entries.len(),
             test_message.interval_inclusion_messages.len()
@@ -157,36 +188,14 @@ mod test {
 
     #[tokio::test]
     async fn can_save_first_submitted_message() {
-        let pool = get_db_pool().await;
         let test_message = get_test_message();
+        let test_app = TestApp::new().await;
 
-        let post_response = get_app_with_db_pool(pool.clone())
-            .oneshot(
-                Request::builder()
-                    .uri("/post_oracle_message")
-                    .method("POST")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(serde_json::to_string(&test_message).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .expect("Request Failed");
-        assert_eq!(post_response.status(), 200);
+        let body = Body::from(serde_json::to_string(&test_message).unwrap());
+        test_app.post("/post_oracle_message", body, 200).await;
 
-        let value_response = get_app_with_db_pool(pool.clone())
-            .oneshot(
-                Request::builder()
-                    .uri("/price_value_attestations")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .expect("Request Failed");
-        assert_eq!(value_response.status(), 200);
-        let body = hyper::body::to_bytes(value_response.into_body())
-            .await
-            .unwrap();
-        let entries: Vec<PriceValueEntry> = serde_json::from_slice(&body).unwrap();
+        let response = test_app.get("/price_value_attestations", 200).await;
+        let entries: Vec<PriceValueEntry> = serde_json::from_slice(&response).unwrap();
 
         assert_eq!(entries.len(), 1);
         assert_eq!(
@@ -202,20 +211,8 @@ mod test {
             test_message.validator_public_key.to_string()
         );
 
-        let interval_response = get_app_with_db_pool(pool.clone())
-            .oneshot(
-                Request::builder()
-                    .uri("/price_interval_attestations")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .expect("Request Failed");
-        assert_eq!(interval_response.status(), 200);
-        let body = hyper::body::to_bytes(interval_response.into_body())
-            .await
-            .unwrap();
-        let entries: Vec<PriceIntervalEntry> = serde_json::from_slice(&body).unwrap();
+        let response = test_app.get("/price_interval_attestations", 200).await;
+        let entries: Vec<PriceIntervalEntry> = serde_json::from_slice(&response).unwrap();
         assert_eq!(
             entries.len(),
             test_message.interval_inclusion_messages.len()
@@ -234,19 +231,10 @@ mod test {
             );
         }
 
-        let response = get_app_with_db_pool(pool.clone())
-            .oneshot(
-                Request::builder()
-                    .uri("/aggregate_price_interval_attestations")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .expect("Request Failed");
-        assert_eq!(response.status(), 200);
-
-        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
-        let entries: Vec<AggregatePriceIntervalEntry> = serde_json::from_slice(&body).unwrap();
+        let response = test_app
+            .get("/aggregate_price_interval_attestations", 200)
+            .await;
+        let entries: Vec<AggregatePriceIntervalEntry> = serde_json::from_slice(&response).unwrap();
         assert_eq!(
             entries.len(),
             test_message.interval_inclusion_messages.len()
@@ -270,19 +258,8 @@ mod test {
             assert_eq!(entry.num_validators, 1);
         }
 
-        let response = get_app_with_db_pool(pool.clone())
-            .oneshot(
-                Request::builder()
-                    .uri("/price_aggregate")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .expect("Request Failed");
-        assert_eq!(response.status(), 200);
-
-        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
-        let data: AggregatePriceIntervalEntry = serde_json::from_slice(&body).unwrap();
+        let response = test_app.get("/price_aggregate", 200).await;
+        let data: AggregatePriceIntervalEntry = serde_json::from_slice(&response).unwrap();
         assert_eq!(
             data.slot_number,
             test_message.interval_inclusion_messages[0]
@@ -290,19 +267,20 @@ mod test {
                 .slot_number as i64
         );
 
-        let response = get_app_with_db_pool(pool.clone())
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/price_aggregate?slot_number={}&interval_size={}", test_message.value_message.message.slot_number, test_message.interval_inclusion_messages[0].message.interval_size))
-                    .body(Body::empty())
-                    .unwrap(),
+        let response = test_app
+            .get(
+                &format!(
+                    "/price_aggregate?slot_number={}&interval_size={}",
+                    test_message.value_message.message.slot_number,
+                    test_message.interval_inclusion_messages[0]
+                        .message
+                        .interval_size
+                ),
+                200,
             )
-            .await
-            .expect("Request Failed");
-        assert_eq!(response.status(), 200);
+            .await;
 
-        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
-        let data: AggregatePriceIntervalEntry = serde_json::from_slice(&body).unwrap();
+        let data: AggregatePriceIntervalEntry = serde_json::from_slice(&response).unwrap();
         assert_eq!(
             data.slot_number,
             test_message.interval_inclusion_messages[0]
@@ -310,80 +288,30 @@ mod test {
                 .slot_number as i64
         );
 
-        let response = get_app_with_db_pool(pool.clone())
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/price_aggregate?slot_number={}", 1))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .expect("Request Failed");
-        assert_eq!(response.status(), 500);
-
-        let response = get_app_with_db_pool(pool.clone())
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/price_aggregate?interval_size={}", 1))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .expect("Request Failed");
-        assert_eq!(response.status(), 500);
-
+        test_app
+            .get(&format!("/price_aggregate?slot_number={}", 1), 500)
+            .await;
+        test_app
+            .get(&format!("/price_aggregate?interval_size={}", 1), 500)
+            .await;
     }
 
     #[tokio::test]
     async fn rejects_invalid_signature_on_value_message() {
-        let pool = get_db_pool().await;
         let mut test_message = get_test_message();
+        let test_app = TestApp::new().await;
 
         test_message.value_message.signature =
             signature_from_random_signer(&test_message.value_message.message);
 
-        let post_response = get_app_with_db_pool(pool.clone())
-            .oneshot(
-                Request::builder()
-                    .uri("/post_oracle_message")
-                    .method("POST")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(serde_json::to_string(&test_message).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .expect("Request Failed");
-        assert_eq!(post_response.status(), 400);
+        let body = Body::from(serde_json::to_string(&test_message).unwrap());
+        test_app.post("/post_oracle_message", body, 400).await;
 
-        let value_response = get_app_with_db_pool(pool.clone())
-            .oneshot(
-                Request::builder()
-                    .uri("/price_value_attestations")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .expect("Request Failed");
-        assert_eq!(value_response.status(), 200);
-        let body = hyper::body::to_bytes(value_response.into_body())
-            .await
-            .unwrap();
+        let body = test_app.get("/price_value_attestations", 200).await;
         let entries: Vec<PriceValueEntry> = serde_json::from_slice(&body).unwrap();
         assert_eq!(entries.len(), 0);
 
-        let interval_response = get_app_with_db_pool(pool)
-            .oneshot(
-                Request::builder()
-                    .uri("/price_interval_attestations")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .expect("Request Failed");
-        assert_eq!(interval_response.status(), 200);
-        let body = hyper::body::to_bytes(interval_response.into_body())
-            .await
-            .unwrap();
+        let body = test_app.get("/price_interval_attestations", 200).await;
         let entries: Vec<PriceIntervalEntry> = serde_json::from_slice(&body).unwrap();
         // Will not save any interval messages even though they are valid
         // TODO: Review if this is intended behaviour
@@ -392,58 +320,24 @@ mod test {
 
     #[tokio::test]
     async fn rejects_invalid_signature_on_interval_message() {
-        let pool = get_db_pool().await;
         let mut test_message = get_test_message();
+        let test_app = TestApp::new().await;
 
         let message_index_to_alter = 42;
         test_message.interval_inclusion_messages[message_index_to_alter].signature =
             signature_from_random_signer(&test_message.value_message.message);
 
-        let post_response = get_app_with_db_pool(pool.clone())
-            .oneshot(
-                Request::builder()
-                    .uri("/post_oracle_message")
-                    .method("POST")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(serde_json::to_string(&test_message).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .expect("Request Failed");
-        assert_eq!(post_response.status(), 400);
+        let body = Body::from(serde_json::to_string(&test_message).unwrap());
+        test_app.post("/post_oracle_message", body, 400).await;
 
-        let value_response = get_app_with_db_pool(pool.clone())
-            .oneshot(
-                Request::builder()
-                    .uri("/price_value_attestations")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .expect("Request Failed");
-        assert_eq!(value_response.status(), 200);
-        let body = hyper::body::to_bytes(value_response.into_body())
-            .await
-            .unwrap();
-        let entries: Vec<PriceValueEntry> = serde_json::from_slice(&body).unwrap();
+        let value_response = test_app.get("/price_value_attestations", 200).await;
+        let entries: Vec<PriceValueEntry> = serde_json::from_slice(&value_response).unwrap();
         // Note that it will still save the the value message, but not the interval message
         // TODO: Review if this is intended behaviour
         assert_eq!(entries.len(), 1);
 
-        let interval_response = get_app_with_db_pool(pool)
-            .oneshot(
-                Request::builder()
-                    .uri("/price_interval_attestations")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .expect("Request Failed");
-        assert_eq!(interval_response.status(), 200);
-        let body = hyper::body::to_bytes(interval_response.into_body())
-            .await
-            .unwrap();
-        let entries: Vec<PriceIntervalEntry> = serde_json::from_slice(&body).unwrap();
+        let interval_response = test_app.get("/price_interval_attestations", 200).await;
+        let entries: Vec<PriceIntervalEntry> = serde_json::from_slice(&interval_response).unwrap();
         // Saves all messages up to the invalid one
         // TODO: Review if this is intended behaviour
         assert_eq!(entries.len(), 42);

@@ -1256,6 +1256,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "bls",
+ "bytes",
  "eth2_ssz_derive",
  "ethereum_ssz",
  "eyre",

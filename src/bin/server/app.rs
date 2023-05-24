@@ -43,10 +43,7 @@ mod test {
     use crate::attestations::{
         AggregatePriceIntervalEntry, OracleMessage, PriceIntervalEntry, PriceValueEntry,
     };
-    use axum::{
-        body::Body,
-        http::Request,
-    };
+    use axum::{body::Body, http::Request};
     use bls::{AggregateSignature, SecretKey, Signature};
     use bytes::Bytes;
     use tower::ServiceExt;
@@ -148,7 +145,9 @@ mod test {
                 .await;
         }
 
-        let response = test_app.get("/aggregate_price_interval_attestations", 200).await;
+        let response = test_app
+            .get("/aggregate_price_interval_attestations", 200)
+            .await;
         let entries: Vec<AggregatePriceIntervalEntry> = serde_json::from_slice(&response).unwrap();
         assert_eq!(
             entries.len(),

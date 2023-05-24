@@ -1,5 +1,6 @@
 use crate::state::AppState;
-use axum::{extract::State, Json};
+use itertools::Itertools;
+use axum::{extract::{Query, State}, Json};
 use bls::{AggregatePublicKey, AggregateSignature, Hash256, PublicKey, Signature};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
@@ -24,7 +25,7 @@ pub struct PriceIntervalEntry {
     pub interval_size: i64,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct AggregatePriceIntervalEntry {
     pub value: i64,
     pub slot_number: i64,
@@ -98,6 +99,129 @@ pub async fn get_price_value_attestations(
     })
     .collect();
     Json(entries)
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct PriceAggregateQueryParams {
+    slot_number: Option<i64>,
+    interval_size: Option<i64>,
+}
+
+pub async fn get_price_aggregate(
+    Query(query): Query<PriceAggregateQueryParams>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<AggregatePriceIntervalEntry>, axum::http::StatusCode> {
+    let db_pool = &state.db_pool;
+    tracing::debug!("Query: {:?}", query);
+    // TODO: Improve error / none handling - remove unwrap
+    let slot_number = query.slot_number.unwrap_or(get_slot_number(db_pool).await.map_err(|e| {
+        tracing::error!("Error getting slot number: {:?}", e);
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    })?.unwrap());
+
+    let interval_size = query.interval_size.unwrap_or(get_most_common_interval_size(db_pool, slot_number).await.map_err(|e| {
+        tracing::error!("Error getting most common interval size: {:?}", e);
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    })?.unwrap());
+
+    let aggregate_price = get_price_aggregate_for_params(db_pool, slot_number, interval_size).await.map_err(|e| {
+        tracing::error!("Error getting aggregate price: {:?}", e);
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(aggregate_price))
+}
+
+async fn get_most_common_interval_size(db_pool: &SqlitePool, slot_number: i64) -> eyre::Result<Option<i64>> {
+    let slot_number = slot_number.to_string();
+    let interval_size = sqlx::query!(
+        "
+        SELECT
+            interval_size
+        FROM
+            aggregate_interval_attestations
+        WHERE
+            slot_number = ?1
+        GROUP BY
+            interval_size
+        ORDER BY
+            COUNT(*) DESC
+        LIMIT 1;
+        ",
+        slot_number
+    )
+    .fetch_one(db_pool)
+    .await?
+    .interval_size;
+    Ok(interval_size)
+}
+
+async fn get_slot_number(db_pool: &SqlitePool) -> eyre::Result<Option<i64>> {
+    let slot_number = sqlx::query!(
+        "
+        SELECT
+            slot_number
+        FROM
+            price_value_attestations
+        ORDER BY
+            slot_number DESC
+        LIMIT 1;
+        "
+    )
+    .fetch_one(db_pool)
+    .await?
+    .slot_number;
+    Ok(slot_number)
+}
+
+async fn get_price_aggregate_for_params(db_pool: &SqlitePool, slot_number: i64, interval_size: i64) -> eyre::Result<AggregatePriceIntervalEntry> {
+    let slot_number = slot_number.to_string();
+    let interval_size = interval_size.to_string();
+    let entries: Vec<AggregatePriceIntervalEntry> = sqlx::query!(
+        "
+        SELECT
+            value,
+            slot_number,
+            aggregate_signature,
+            aggregate_public_key,
+            interval_size,
+            num_validators
+        FROM
+            aggregate_interval_attestations 
+        WHERE
+            slot_number = ?1
+        AND
+            interval_size = ?2
+        ",
+        slot_number,
+        interval_size
+    )
+    .fetch_all(db_pool)
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| AggregatePriceIntervalEntry {
+        value: row.value,
+        slot_number: row.slot_number,
+        aggregate_signature: row.aggregate_signature,
+        aggregate_public_key: row.aggregate_public_key,
+        interval_size: row.interval_size,
+        num_validators: row.num_validators,
+    })
+    .collect();
+    let max_num_validators = entries
+        .iter()
+        .map(|entry| entry.num_validators)
+        .max().ok_or(eyre::eyre!("No entries found"))?;
+    let entries_with_max_num_validators_ordered_by_value: Vec<AggregatePriceIntervalEntry> = entries
+        .into_iter()
+        .filter(|entry| entry.num_validators == max_num_validators)
+        .sorted_by(|a, b| Ord::cmp(&a.value, &b.value))
+        .collect();
+
+    let median_index = entries_with_max_num_validators_ordered_by_value.len() / 2;
+    let median_entry = entries_with_max_num_validators_ordered_by_value[median_index].clone();
+    Ok(median_entry)
 }
 
 pub async fn get_aggregate_price_interval_attestations(

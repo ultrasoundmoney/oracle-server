@@ -1261,6 +1261,7 @@ dependencies = [
  "eyre",
  "hex",
  "hyper",
+ "itertools",
  "serde",
  "serde_json",
  "sha3",

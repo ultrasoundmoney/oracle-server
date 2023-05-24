@@ -1,6 +1,7 @@
 use crate::attestations::{
     get_aggregate_price_interval_attestations, get_price_interval_attestations,
     get_price_value_attestations, post_oracle_message,
+    get_price_aggregate,
 };
 use crate::db::get_db_pool;
 use crate::state::AppState;
@@ -32,6 +33,10 @@ fn get_app_with_db_pool(db_pool: SqlitePool) -> Router {
             get(get_price_interval_attestations),
         )
         .route("/post_oracle_message", post(post_oracle_message))
+        .route(
+            "/price_aggregate",
+            get(get_price_aggregate),
+        )
         .with_state(shared_state)
 }
 
@@ -135,6 +140,18 @@ mod test {
                 hex::encode(aggregate_signature.serialize())
             );
             assert_eq!(entry.num_validators, num_validators);
+
+            // TODO: Find out how to verify the aggregate signature with aggregate public key
+            // let signature = Signature::deserialize(&hex::decode(entry.aggregate_signature.clone()).unwrap())
+            //     .expect("Failed to deserialize signature");
+            // let public_key = bls::PublicKey::deserialize(&hex::decode(entry.aggregate_public_key.clone()).unwrap())
+            //     .expect("Failed to deserialize public key");
+            // assert!(
+            //     signature.verify(
+            //         &public_key,
+            //         get_message_digest(&test_message.interval_inclusion_messages[i].message),
+            //     )
+            // );
         }
     }
 
@@ -217,7 +234,7 @@ mod test {
             );
         }
 
-        let response = get_app_with_db_pool(pool)
+        let response = get_app_with_db_pool(pool.clone())
             .oneshot(
                 Request::builder()
                     .uri("/aggregate_price_interval_attestations")
@@ -252,6 +269,69 @@ mod test {
             );
             assert_eq!(entry.num_validators, 1);
         }
+
+        let response = get_app_with_db_pool(pool.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/price_aggregate")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("Request Failed");
+        assert_eq!(response.status(), 200);
+
+        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+        let data: AggregatePriceIntervalEntry = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            data.slot_number,
+            test_message.interval_inclusion_messages[0]
+                .message
+                .slot_number as i64
+        );
+
+        let response = get_app_with_db_pool(pool.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/price_aggregate?slot_number={}&interval_size={}", test_message.value_message.message.slot_number, test_message.interval_inclusion_messages[0].message.interval_size))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("Request Failed");
+        assert_eq!(response.status(), 200);
+
+        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+        let data: AggregatePriceIntervalEntry = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            data.slot_number,
+            test_message.interval_inclusion_messages[0]
+                .message
+                .slot_number as i64
+        );
+
+        let response = get_app_with_db_pool(pool.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/price_aggregate?slot_number={}", 1))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("Request Failed");
+        assert_eq!(response.status(), 500);
+
+        let response = get_app_with_db_pool(pool.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/price_aggregate?interval_size={}", 1))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("Request Failed");
+        assert_eq!(response.status(), 500);
+
     }
 
     #[tokio::test]

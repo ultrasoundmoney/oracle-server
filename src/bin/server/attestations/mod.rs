@@ -1,6 +1,6 @@
 use crate::state::AppState;
 use axum::{extract::State, Json};
-use bls::{AggregateSignature, Hash256, PublicKey, Signature};
+use bls::{AggregatePublicKey, AggregateSignature, Hash256, PublicKey, Signature};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use sqlx::SqlitePool;
@@ -29,6 +29,7 @@ pub struct AggregatePriceIntervalEntry {
     pub value: i64,
     pub slot_number: i64,
     pub aggregate_signature: String,
+    pub aggregate_public_key: String,
     pub interval_size: i64,
     pub num_validators: i64,
 }
@@ -109,6 +110,7 @@ pub async fn get_aggregate_price_interval_attestations(
             value,
             slot_number,
             aggregate_signature,
+            aggregate_public_key,
             interval_size,
             num_validators
         FROM
@@ -123,6 +125,7 @@ pub async fn get_aggregate_price_interval_attestations(
         value: row.value,
         slot_number: row.slot_number,
         aggregate_signature: row.aggregate_signature,
+        aggregate_public_key: row.aggregate_public_key,
         interval_size: row.interval_size,
         num_validators: row.num_validators,
     })
@@ -274,22 +277,24 @@ async fn save_price_interval_attestation(
     .await?;
 
     // TODO: Review if we really want to aggregate every time we receive a new message
-    extend_or_create_aggregate_interval_attestation(db_pool, message).await?;
+    extend_or_create_aggregate_interval_attestation(db_pool, message, validator_public_key).await?;
     Ok(())
 }
 
 async fn extend_or_create_aggregate_interval_attestation(
     db_pool: &SqlitePool,
     message: &SignedIntervalInclusionMessage,
+    validator_public_key: &PublicKey,
 ) -> eyre::Result<()> {
     let interval_size = message.message.interval_size.to_string();
     let slot_number = message.message.slot_number.to_string();
     let value = message.message.value.to_string();
-    let (new_num_validators, mut aggregate_signature) = if let Some(entry) = sqlx::query!(
+    let (new_num_validators, mut aggregate_signature, aggregate_public_key) = if let Some(entry) = sqlx::query!(
         "
         SELECT
             num_validators,
-            aggregate_signature
+            aggregate_signature,
+            aggregate_public_key
         FROM
             aggregate_interval_attestations
         WHERE
@@ -310,13 +315,16 @@ async fn extend_or_create_aggregate_interval_attestation(
             entry.num_validators + 1,
             AggregateSignature::deserialize(&hex::decode(entry.aggregate_signature)?)
                 .map_err(|_| eyre::eyre!("Invalid aggregate signature in DB"))?,
+            AggregatePublicKey::aggregate(&[PublicKey::deserialize(&hex::decode(entry.aggregate_public_key)?).map_err(|_| eyre::eyre!("Invalid aggregate public key in DB"))?, validator_public_key.clone()]).map_err(|_| eyre::eyre!("Invalid aggregate public key in DB"))?,
+
         )
     } else {
-        (1, AggregateSignature::infinity())
+        (1, AggregateSignature::infinity(), AggregatePublicKey::aggregate(&[validator_public_key.clone()]).map_err(|_| eyre::eyre!("Invalid aggregate public key"))?)
     };
 
     aggregate_signature.add_assign(&message.signature);
     let new_aggregate_signature = hex::encode(aggregate_signature.serialize());
+    let new_aggregate_public_key = hex::encode(aggregate_public_key.to_public_key().serialize());
 
     if new_num_validators == 1 {
         // Create new db entry
@@ -327,14 +335,16 @@ async fn extend_or_create_aggregate_interval_attestation(
                 interval_size,
                 slot_number,
                 num_validators,
-                aggregate_signature
+                aggregate_signature,
+                aggregate_public_key
             )
             VALUES (
                 ?1,
                 ?2,
                 ?3,
                 ?4,
-                ?5
+                ?5,
+                ?6
             );
             ",
             value,
@@ -342,6 +352,7 @@ async fn extend_or_create_aggregate_interval_attestation(
             slot_number,
             new_num_validators,
             new_aggregate_signature,
+            new_aggregate_public_key,
         )
         .execute(db_pool)
         .await?;

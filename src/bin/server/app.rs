@@ -288,6 +288,11 @@ mod test {
                 .slot_number as i64
         );
 
+        assert_eq!(
+            data.value,
+            test_message.value_message.message.price.value as i64 / 10000
+        );
+
         test_app
             .get(&format!("/price_aggregate?slot_number={}", 1), 500)
             .await;

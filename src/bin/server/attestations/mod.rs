@@ -95,10 +95,10 @@ pub async fn get_price_value_attestations(
     .unwrap()
     .into_iter()
     .map(|row| PriceValueEntry {
-        validator_public_key: row.validator_public_key.into(),
-        value: row.value.into(),
-        slot_number: row.slot_number.into(),
-        signature: row.signature.into(),
+        validator_public_key: row.validator_public_key,
+        value: row.value,
+        slot_number: row.slot_number,
+        signature: row.signature,
     })
     .collect();
     Json(entries)
@@ -153,8 +153,6 @@ async fn get_most_common_interval_size(
 ) -> eyre::Result<Option<i64>> {
     #[cfg(not(postgres))]
     let slot_number = slot_number.to_string();
-    #[cfg(postgres)]
-    let slot_number = slot_number as i64;
     let interval_size = sqlx::query!(
         "
         SELECT
@@ -201,7 +199,7 @@ async fn get_slot_number(db_pool: &DbPool) -> eyre::Result<Option<i64>> {
     .slot_number;
     #[cfg(postgres)]
     {
-        Ok(Some(slot_number.into()))
+        Ok(Some(slot_number))
     }
     #[cfg(not(postgres))]
     {
@@ -216,8 +214,6 @@ async fn get_price_aggregate_for_params(
 ) -> eyre::Result<AggregatePriceIntervalEntry> {
     #[cfg(not(postgres))]
     let (slot_number, interval_size) = (slot_number.to_string(), interval_size.to_string());
-    #[cfg(postgres)]
-    let (slot_number, interval_size) = (slot_number as i64, interval_size as i64);
     let entries: Vec<AggregatePriceIntervalEntry> = sqlx::query!(
         "
         SELECT
@@ -242,12 +238,12 @@ async fn get_price_aggregate_for_params(
     .unwrap()
     .into_iter()
     .map(|row| AggregatePriceIntervalEntry {
-        value: row.value.into(),
-        slot_number: row.slot_number.into(),
-        aggregate_signature: row.aggregate_signature.into(),
-        aggregate_public_key: row.aggregate_public_key.into(),
-        interval_size: row.interval_size.into(),
-        num_validators: row.num_validators.into(),
+        value: row.value,
+        slot_number: row.slot_number,
+        aggregate_signature: row.aggregate_signature,
+        aggregate_public_key: row.aggregate_public_key,
+        interval_size: row.interval_size,
+        num_validators: row.num_validators,
     })
     .collect();
     let max_num_validators = entries
@@ -289,12 +285,12 @@ pub async fn get_aggregate_price_interval_attestations(
     .unwrap()
     .into_iter()
     .map(|row| AggregatePriceIntervalEntry {
-        value: row.value.into(),
-        slot_number: row.slot_number.into(),
-        aggregate_signature: row.aggregate_signature.into(),
-        aggregate_public_key: row.aggregate_public_key.into(),
-        interval_size: row.interval_size.into(),
-        num_validators: row.num_validators.into(),
+        value: row.value,
+        slot_number: row.slot_number,
+        aggregate_signature: row.aggregate_signature,
+        aggregate_public_key: row.aggregate_public_key,
+        interval_size: row.interval_size,
+        num_validators: row.num_validators,
     })
     .collect();
     Json(entries)
@@ -321,11 +317,11 @@ pub async fn get_price_interval_attestations(
     .unwrap()
     .into_iter()
     .map(|row| PriceIntervalEntry {
-        validator_public_key: row.validator_public_key.into(),
-        value: row.value.into(),
-        slot_number: row.slot_number.into(),
-        signature: row.signature.into(),
-        interval_size: row.interval_size.into(),
+        validator_public_key: row.validator_public_key,
+        value: row.value,
+        slot_number: row.slot_number,
+        signature: row.signature,
+        interval_size: row.interval_size,
     })
     .collect();
     Json(entries)

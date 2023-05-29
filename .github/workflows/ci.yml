@@ -37,7 +37,7 @@ jobs:
     name: Check
     runs-on: ubuntu-latest
     env:
-      DATABASE_URL: postgresql://localhost
+      DATABASE_URL: postgresql://postgres:postgres@localhost
       RUSTFLAGS: --cfg postgres
 
     # Source: https://docs.github.com/en/actions/using-containerized-services/creating-postgresql-service-containers
@@ -47,6 +47,9 @@ jobs:
       postgres:
         # Docker Hub image
         image: postgres
+        # Provide the password for postgres
+        env:
+          POSTGRES_PASSWORD: postgres
         # Set health checks to wait until postgres has started
         options: >-
           --health-cmd pg_isready

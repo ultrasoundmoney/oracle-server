@@ -1,3 +1,4 @@
+use crate::db::DbPool;
 use crate::state::AppState;
 use axum::{
     extract::{Query, State},
@@ -7,7 +8,6 @@ use bls::{AggregatePublicKey, AggregateSignature, Hash256, PublicKey, Signature}
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
-use sqlx::SqlitePool;
 use ssz_derive::{Decode, Encode};
 use std::sync::Arc;
 
@@ -95,10 +95,10 @@ pub async fn get_price_value_attestations(
     .unwrap()
     .into_iter()
     .map(|row| PriceValueEntry {
-        validator_public_key: row.validator_public_key,
-        value: row.value,
-        slot_number: row.slot_number,
-        signature: row.signature,
+        validator_public_key: row.validator_public_key.into(),
+        value: row.value.into(),
+        slot_number: row.slot_number.into(),
+        signature: row.signature.into(),
     })
     .collect();
     Json(entries)
@@ -148,10 +148,13 @@ pub async fn get_price_aggregate(
 }
 
 async fn get_most_common_interval_size(
-    db_pool: &SqlitePool,
+    db_pool: &DbPool,
     slot_number: i64,
 ) -> eyre::Result<Option<i64>> {
+    #[cfg(not(postgres))]
     let slot_number = slot_number.to_string();
+    #[cfg(postgres)]
+    let slot_number = slot_number as i64;
     let interval_size = sqlx::query!(
         "
         SELECT
@@ -159,7 +162,7 @@ async fn get_most_common_interval_size(
         FROM
             aggregate_interval_attestations
         WHERE
-            slot_number = ?1
+            slot_number = $1
         GROUP BY
             interval_size
         ORDER BY
@@ -171,10 +174,17 @@ async fn get_most_common_interval_size(
     .fetch_one(db_pool)
     .await?
     .interval_size;
-    Ok(interval_size)
+    #[cfg(postgres)]
+    {
+        Ok(Some(interval_size))
+    }
+    #[cfg(not(postgres))]
+    {
+        Ok(interval_size)
+    }
 }
 
-async fn get_slot_number(db_pool: &SqlitePool) -> eyre::Result<Option<i64>> {
+async fn get_slot_number(db_pool: &DbPool) -> eyre::Result<Option<i64>> {
     let slot_number = sqlx::query!(
         "
         SELECT
@@ -189,16 +199,25 @@ async fn get_slot_number(db_pool: &SqlitePool) -> eyre::Result<Option<i64>> {
     .fetch_one(db_pool)
     .await?
     .slot_number;
-    Ok(slot_number)
+    #[cfg(postgres)]
+    {
+        Ok(Some(slot_number.into()))
+    }
+    #[cfg(not(postgres))]
+    {
+        Ok(slot_number)
+    }
 }
 
 async fn get_price_aggregate_for_params(
-    db_pool: &SqlitePool,
+    db_pool: &DbPool,
     slot_number: i64,
     interval_size: i64,
 ) -> eyre::Result<AggregatePriceIntervalEntry> {
-    let slot_number = slot_number.to_string();
-    let interval_size = interval_size.to_string();
+    #[cfg(not(postgres))]
+    let (slot_number, interval_size) = (slot_number.to_string(), interval_size.to_string());
+    #[cfg(postgres)]
+    let (slot_number, interval_size) = (slot_number as i64, interval_size as i64);
     let entries: Vec<AggregatePriceIntervalEntry> = sqlx::query!(
         "
         SELECT
@@ -211,9 +230,9 @@ async fn get_price_aggregate_for_params(
         FROM
             aggregate_interval_attestations 
         WHERE
-            slot_number = ?1
+            slot_number = $1
         AND
-            interval_size = ?2
+            interval_size = $2
         ",
         slot_number,
         interval_size
@@ -223,12 +242,12 @@ async fn get_price_aggregate_for_params(
     .unwrap()
     .into_iter()
     .map(|row| AggregatePriceIntervalEntry {
-        value: row.value,
-        slot_number: row.slot_number,
-        aggregate_signature: row.aggregate_signature,
-        aggregate_public_key: row.aggregate_public_key,
-        interval_size: row.interval_size,
-        num_validators: row.num_validators,
+        value: row.value.into(),
+        slot_number: row.slot_number.into(),
+        aggregate_signature: row.aggregate_signature.into(),
+        aggregate_public_key: row.aggregate_public_key.into(),
+        interval_size: row.interval_size.into(),
+        num_validators: row.num_validators.into(),
     })
     .collect();
     let max_num_validators = entries
@@ -270,12 +289,12 @@ pub async fn get_aggregate_price_interval_attestations(
     .unwrap()
     .into_iter()
     .map(|row| AggregatePriceIntervalEntry {
-        value: row.value,
-        slot_number: row.slot_number,
-        aggregate_signature: row.aggregate_signature,
-        aggregate_public_key: row.aggregate_public_key,
-        interval_size: row.interval_size,
-        num_validators: row.num_validators,
+        value: row.value.into(),
+        slot_number: row.slot_number.into(),
+        aggregate_signature: row.aggregate_signature.into(),
+        aggregate_public_key: row.aggregate_public_key.into(),
+        interval_size: row.interval_size.into(),
+        num_validators: row.num_validators.into(),
     })
     .collect();
     Json(entries)
@@ -302,11 +321,11 @@ pub async fn get_price_interval_attestations(
     .unwrap()
     .into_iter()
     .map(|row| PriceIntervalEntry {
-        validator_public_key: row.validator_public_key,
-        value: row.value,
-        slot_number: row.slot_number,
-        signature: row.signature,
-        interval_size: row.interval_size,
+        validator_public_key: row.validator_public_key.into(),
+        value: row.value.into(),
+        slot_number: row.slot_number.into(),
+        signature: row.signature.into(),
+        interval_size: row.interval_size.into(),
     })
     .collect();
     Json(entries)
@@ -334,17 +353,22 @@ pub async fn post_oracle_message(
 }
 
 async fn save_price_value_attestation(
-    db_pool: &SqlitePool,
+    db_pool: &DbPool,
     message: &SignedPriceValueMessage,
     validator_public_key: &PublicKey,
 ) -> eyre::Result<()> {
     if !validate_message(validator_public_key, &message.message, &message.signature) {
         return Err(eyre::eyre!("Invalid signature"));
     }
-    let value = message.message.price.value.to_string();
-    let slot_number = message.message.slot_number.to_string();
-    let signature = message.signature.to_string();
+    let value = message.message.price.value;
+    let slot_number = message.message.slot_number;
+    let signature = &message.signature.to_string();
     let pk_string = validator_public_key.to_string();
+
+    #[cfg(not(postgres))]
+    let (value, slot_number) = (value.to_string(), slot_number.to_string());
+    #[cfg(postgres)]
+    let (value, slot_number) = (value as i64, slot_number as i64);
 
     // Save price_value_message in DB
     sqlx::query!(
@@ -356,10 +380,10 @@ async fn save_price_value_attestation(
             signature
         )
         VALUES (
-            ?1,
-            ?2,
-            ?3,
-            ?4
+            $1,
+            $2,
+            $3,
+            $4
         );
         ",
         pk_string,
@@ -373,7 +397,7 @@ async fn save_price_value_attestation(
 }
 
 async fn save_price_interval_attestations(
-    db_pool: &SqlitePool,
+    db_pool: &DbPool,
     messages: &Vec<SignedIntervalInclusionMessage>,
     validator_public_key: &PublicKey,
 ) -> eyre::Result<()> {
@@ -384,18 +408,27 @@ async fn save_price_interval_attestations(
 }
 
 async fn save_price_interval_attestation(
-    db_pool: &SqlitePool,
+    db_pool: &DbPool,
     message: &SignedIntervalInclusionMessage,
     validator_public_key: &PublicKey,
 ) -> eyre::Result<()> {
     if !validate_message(validator_public_key, &message.message, &message.signature) {
         return Err(eyre::eyre!("Invalid signature"));
     }
-    let value = message.message.value.to_string();
-    let interval_size = message.message.interval_size.to_string();
-    let slot_number = message.message.slot_number.to_string();
-    let signature = message.signature.to_string();
+    let value = message.message.value;
+    let interval_size = message.message.interval_size;
+    let slot_number = message.message.slot_number;
+    let signature = &message.signature.to_string();
     let pk_string = validator_public_key.to_string();
+    #[cfg(not(postgres))]
+    let (value, interval_size, slot_number) = (
+        value.to_string(),
+        interval_size.to_string(),
+        slot_number.to_string(),
+    );
+    #[cfg(postgres)]
+    let (value, interval_size, slot_number) =
+        (value as i64, interval_size as i64, slot_number as i64);
 
     // Save price_value_message in DB
     sqlx::query!(
@@ -408,11 +441,11 @@ async fn save_price_interval_attestation(
             signature
         )
         VALUES (
-            ?1,
-            ?2,
-            ?3,
-            ?4,
-            ?5
+            $1,
+            $2,
+            $3,
+            $4,
+            $5
         );
         ",
         pk_string,
@@ -430,13 +463,22 @@ async fn save_price_interval_attestation(
 }
 
 async fn extend_or_create_aggregate_interval_attestation(
-    db_pool: &SqlitePool,
+    db_pool: &DbPool,
     message: &SignedIntervalInclusionMessage,
     validator_public_key: &PublicKey,
 ) -> eyre::Result<()> {
-    let interval_size = message.message.interval_size.to_string();
-    let slot_number = message.message.slot_number.to_string();
-    let value = message.message.value.to_string();
+    let interval_size = message.message.interval_size;
+    let slot_number = message.message.slot_number;
+    let value = message.message.value;
+    #[cfg(not(postgres))]
+    let (interval_size, slot_number, value) = (
+        interval_size.to_string(),
+        slot_number.to_string(),
+        value.to_string(),
+    );
+    #[cfg(postgres)]
+    let (interval_size, slot_number, value) =
+        (interval_size as i64, slot_number as i64, value as i64);
     let (new_num_validators, mut aggregate_signature, aggregate_public_key) = if let Some(entry) =
         sqlx::query!(
             "
@@ -447,11 +489,11 @@ async fn extend_or_create_aggregate_interval_attestation(
         FROM
             aggregate_interval_attestations
         WHERE
-            interval_size = ?1
+            interval_size = $1
         AND
-            slot_number = ?2
+            slot_number = $2
         AND
-            value = ?3;
+            value = $3;
         ",
             interval_size,
             slot_number,
@@ -497,12 +539,12 @@ async fn extend_or_create_aggregate_interval_attestation(
                 aggregate_public_key
             )
             VALUES (
-                ?1,
-                ?2,
-                ?3,
-                ?4,
-                ?5,
-                ?6
+                $1,
+                $2,
+                $3,
+                $4,
+                $5,
+                $6
             );
             ",
             value,
@@ -520,14 +562,14 @@ async fn extend_or_create_aggregate_interval_attestation(
             "
             UPDATE aggregate_interval_attestations
             SET
-                num_validators = ?1,
-                aggregate_signature = ?2
+                num_validators = $1,
+                aggregate_signature = $2
             WHERE
-                interval_size = ?3
+                interval_size = $3
             AND
-                slot_number = ?4
+                slot_number = $4
             AND
-                value = ?5;
+                value = $5;
             ",
             new_num_validators,
             new_aggregate_signature,

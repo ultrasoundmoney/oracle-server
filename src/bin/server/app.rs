@@ -2,13 +2,12 @@ use crate::attestations::{
     get_aggregate_price_interval_attestations, get_price_aggregate,
     get_price_interval_attestations, get_price_value_attestations, post_oracle_message,
 };
-use crate::db::get_db_pool;
+use crate::db::{get_db_pool, DbPool};
 use crate::state::AppState;
 use axum::{
     routing::{get, post},
     Router,
 };
-use sqlx::SqlitePool;
 use std::sync::Arc;
 
 pub async fn get_app() -> Router {
@@ -16,7 +15,7 @@ pub async fn get_app() -> Router {
     get_app_with_db_pool(db_pool)
 }
 
-fn get_app_with_db_pool(db_pool: SqlitePool) -> Router {
+fn get_app_with_db_pool(db_pool: DbPool) -> Router {
     let shared_state = Arc::new(AppState { db_pool });
     Router::new()
         .route(
@@ -48,9 +47,9 @@ mod test {
     use bytes::Bytes;
     use tower::ServiceExt;
 
-    async fn get_db_pool() -> SqlitePool {
+    async fn get_db_pool() -> DbPool {
         let test_db_url = "sqlite::memory:";
-        let pool = SqlitePool::connect(test_db_url).await.unwrap();
+        let pool = DbPool::connect(test_db_url).await.unwrap();
         sqlx::migrate!("./migrations")
             .run(&pool)
             .await
@@ -63,7 +62,7 @@ mod test {
         Post(Body),
     }
     struct TestApp {
-        db_pool: SqlitePool,
+        db_pool: DbPool,
     }
 
     impl TestApp {

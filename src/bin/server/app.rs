@@ -8,7 +8,6 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use itertools::Itertools;
 use std::sync::Arc;
 
 pub async fn get_app() -> Router {
@@ -47,6 +46,7 @@ mod test {
     use axum::{body::Body, http::Request};
     use bls::{AggregateSignature, SecretKey, Signature};
     use bytes::Bytes;
+    use itertools::Itertools;
     use tower::ServiceExt;
 
     async fn get_db_pool() -> DbPool {

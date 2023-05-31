@@ -1,8 +1,19 @@
 version: "3.9"
 services:
   server:
-    build: .
+    build:
+      context: .
+      args:
+        DATABASE_URL: postgresql://postgres:postgres@db
     ports:
       - "3000:3000"
   client:
     image: "oracle-client"
+  db:
+    image: postgres:14.1-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - '5432:5432'

@@ -170,7 +170,7 @@ async fn get_most_common_interval_size(
     .fetch_one(db_pool)
     .await?
     .interval_size;
-        Ok(Some(interval_size))
+    Ok(Some(interval_size))
 }
 
 async fn get_slot_number(db_pool: &DbPool) -> eyre::Result<Option<i64>> {
@@ -188,7 +188,7 @@ async fn get_slot_number(db_pool: &DbPool) -> eyre::Result<Option<i64>> {
     .fetch_one(db_pool)
     .await?
     .slot_number;
-        Ok(Some(slot_number))
+    Ok(Some(slot_number))
 }
 
 async fn get_price_aggregate_for_params(

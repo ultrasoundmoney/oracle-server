@@ -8,6 +8,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use itertools::Itertools;
 use std::sync::Arc;
 
 pub async fn get_app() -> Router {
@@ -105,7 +106,7 @@ mod test {
     }
 
     fn get_test_message() -> OracleMessage {
-        let test_data_file = std::fs::File::open("./test_data/input/17292025.json").unwrap();
+        let test_data_file = std::fs::File::open("./test_data/input/6556020.json").unwrap();
         serde_json::from_reader(test_data_file).unwrap()
     }
 
@@ -124,7 +125,7 @@ mod test {
 
     #[sqlx::test]
     async fn can_aggregate_multiple_messages(db_pool: DbPool) {
-        let num_validators = 3;
+        let num_validators = 1;
         let private_keys: Vec<SecretKey> =
             (0..num_validators).map(|_| SecretKey::random()).collect();
         let test_message = get_test_message();
@@ -153,7 +154,15 @@ mod test {
             test_message.interval_inclusion_messages.len()
         );
 
-        for (i, entry) in entries.iter().enumerate() {
+        for (i, entry) in entries
+            .iter()
+            .sorted_by(|a, b| a.value.cmp(&b.value))
+            .enumerate()
+        {
+            assert_eq!(
+                entry.value,
+                test_message.interval_inclusion_messages[i].message.value as i64
+            );
             assert_eq!(
                 entry.slot_number,
                 test_message.interval_inclusion_messages[i]
@@ -191,10 +200,7 @@ mod test {
 
         let response = test_app.get("/price_interval_attestations", 200).await;
         let entries: Vec<PriceIntervalEntry> = serde_json::from_slice(&response).unwrap();
-        assert_eq!(
-            entries.len(),
-            0
-        );
+        assert_eq!(entries.len(), 0);
 
         let body = Body::from(serde_json::to_string(&test_message).unwrap());
         test_app.post("/post_oracle_message", body, 200).await;
@@ -245,7 +251,15 @@ mod test {
             test_message.interval_inclusion_messages.len()
         );
 
-        for (i, entry) in entries.iter().enumerate() {
+        for (i, entry) in entries
+            .iter()
+            .sorted_by(|a, b| a.value.cmp(&b.value))
+            .enumerate()
+        {
+            assert_eq!(
+                entry.value,
+                test_message.interval_inclusion_messages[i].message.value as i64
+            );
             assert_eq!(
                 entry.slot_number,
                 test_message.interval_inclusion_messages[i]

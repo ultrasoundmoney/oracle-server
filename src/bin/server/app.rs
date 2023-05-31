@@ -42,14 +42,15 @@ mod test {
     use crate::attestations::{
         AggregatePriceIntervalEntry, OracleMessage, PriceIntervalEntry, PriceValueEntry,
     };
+    use crate::db::get_db_url;
     use axum::{body::Body, http::Request};
     use bls::{AggregateSignature, SecretKey, Signature};
     use bytes::Bytes;
     use tower::ServiceExt;
 
     async fn get_db_pool() -> DbPool {
-        let test_db_url = "sqlite::memory:";
-        let pool = DbPool::connect(test_db_url).await.unwrap();
+        let test_db_url = get_db_url();
+        let pool = DbPool::connect(&test_db_url).await.unwrap();
         sqlx::migrate!("./migrations")
             .run(&pool)
             .await
@@ -66,8 +67,7 @@ mod test {
     }
 
     impl TestApp {
-        pub async fn new() -> Self {
-            let db_pool = get_db_pool().await;
+        pub async fn new(db_pool: DbPool) -> Self {
             TestApp { db_pool }
         }
 
@@ -122,8 +122,8 @@ mod test {
         message
     }
 
-    #[tokio::test]
-    async fn can_aggregate_multiple_messages() {
+    #[sqlx::test]
+    async fn can_aggregate_multiple_messages(db_pool: DbPool) {
         let num_validators = 3;
         let private_keys: Vec<SecretKey> =
             (0..num_validators).map(|_| SecretKey::random()).collect();
@@ -133,7 +133,7 @@ mod test {
             .map(|private_key| sign_oracle_message_with_new_key(test_message.clone(), &private_key))
             .collect();
 
-        let test_app = TestApp::new().await;
+        let test_app = TestApp::new(db_pool).await;
         for message in messages.iter() {
             test_app
                 .post(
@@ -184,10 +184,17 @@ mod test {
         }
     }
 
-    #[tokio::test]
-    async fn can_save_first_submitted_message() {
+    #[sqlx::test]
+    async fn can_save_first_submitted_message(db_pool: DbPool) {
         let test_message = get_test_message();
-        let test_app = TestApp::new().await;
+        let test_app = TestApp::new(db_pool).await;
+
+        let response = test_app.get("/price_interval_attestations", 200).await;
+        let entries: Vec<PriceIntervalEntry> = serde_json::from_slice(&response).unwrap();
+        assert_eq!(
+            entries.len(),
+            0
+        );
 
         let body = Body::from(serde_json::to_string(&test_message).unwrap());
         test_app.post("/post_oracle_message", body, 200).await;
@@ -299,10 +306,10 @@ mod test {
             .await;
     }
 
-    #[tokio::test]
-    async fn rejects_invalid_signature_on_value_message() {
+    #[sqlx::test]
+    async fn rejects_invalid_signature_on_value_message(db_pool: DbPool) {
         let mut test_message = get_test_message();
-        let test_app = TestApp::new().await;
+        let test_app = TestApp::new(db_pool).await;
 
         test_message.value_message.signature =
             signature_from_random_signer(&test_message.value_message.message);
@@ -321,10 +328,10 @@ mod test {
         assert_eq!(entries.len(), 0);
     }
 
-    #[tokio::test]
-    async fn rejects_invalid_signature_on_interval_message() {
+    #[sqlx::test]
+    async fn rejects_invalid_signature_on_interval_message(db_pool: DbPool) {
         let mut test_message = get_test_message();
-        let test_app = TestApp::new().await;
+        let test_app = TestApp::new(db_pool).await;
 
         let message_index_to_alter = 42;
         test_message.interval_inclusion_messages[message_index_to_alter].signature =

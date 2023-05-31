@@ -1,6 +1,6 @@
 use crate::env;
 
-fn get_db_url() -> String {
+pub fn get_db_url() -> String {
     env::get_env_var_unsafe("DATABASE_URL")
 }
 

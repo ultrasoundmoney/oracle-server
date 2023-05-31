@@ -17,7 +17,6 @@ COPY ./src ./src
 COPY ./migrations ./migrations
 COPY ./Cargo.toml ./Cargo.toml
 ENV DATABASE_URL=${DATABASE_URL}
-ENV RUSTFLAGS="--cfg postgres"
 RUN cargo install sqlx-cli
 RUN sqlx database create
 RUN sqlx migrate run

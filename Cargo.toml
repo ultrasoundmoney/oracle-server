@@ -3,12 +3,6 @@ name = "oracle"
 version = "0.1.0"
 edition = "2021"
 
-[features]
-default = ["sqlite"]
-sqlite = []
-postgres = []
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 axum = "0.6.12"
 serde = { version = "1.0.159", features = ["derive"] }
@@ -16,7 +10,6 @@ sqlx = { version = "0.6.3", features = [
   "json",
   "offline",
   "postgres",
-  "sqlite",
   "runtime-tokio-native-tls",
 ] }
 tokio = { version = "1.27.0", features = ["full"] }

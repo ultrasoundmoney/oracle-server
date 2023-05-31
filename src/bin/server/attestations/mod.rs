@@ -151,8 +151,6 @@ async fn get_most_common_interval_size(
     db_pool: &DbPool,
     slot_number: i64,
 ) -> eyre::Result<Option<i64>> {
-    #[cfg(not(postgres))]
-    let slot_number = slot_number.to_string();
     let interval_size = sqlx::query!(
         "
         SELECT
@@ -172,14 +170,7 @@ async fn get_most_common_interval_size(
     .fetch_one(db_pool)
     .await?
     .interval_size;
-    #[cfg(postgres)]
-    {
         Ok(Some(interval_size))
-    }
-    #[cfg(not(postgres))]
-    {
-        Ok(interval_size)
-    }
 }
 
 async fn get_slot_number(db_pool: &DbPool) -> eyre::Result<Option<i64>> {
@@ -197,14 +188,7 @@ async fn get_slot_number(db_pool: &DbPool) -> eyre::Result<Option<i64>> {
     .fetch_one(db_pool)
     .await?
     .slot_number;
-    #[cfg(postgres)]
-    {
         Ok(Some(slot_number))
-    }
-    #[cfg(not(postgres))]
-    {
-        Ok(slot_number)
-    }
 }
 
 async fn get_price_aggregate_for_params(
@@ -212,8 +196,6 @@ async fn get_price_aggregate_for_params(
     slot_number: i64,
     interval_size: i64,
 ) -> eyre::Result<AggregatePriceIntervalEntry> {
-    #[cfg(not(postgres))]
-    let (slot_number, interval_size) = (slot_number.to_string(), interval_size.to_string());
     let entries: Vec<AggregatePriceIntervalEntry> = sqlx::query!(
         "
         SELECT
@@ -356,15 +338,10 @@ async fn save_price_value_attestation(
     if !validate_message(validator_public_key, &message.message, &message.signature) {
         return Err(eyre::eyre!("Invalid signature"));
     }
-    let value = message.message.price.value;
-    let slot_number = message.message.slot_number;
+    let value = message.message.price.value as i64;
+    let slot_number = message.message.slot_number as i64;
     let signature = &message.signature.to_string();
     let pk_string = validator_public_key.to_string();
-
-    #[cfg(not(postgres))]
-    let (value, slot_number) = (value.to_string(), slot_number.to_string());
-    #[cfg(postgres)]
-    let (value, slot_number) = (value as i64, slot_number as i64);
 
     // Save price_value_message in DB
     sqlx::query!(
@@ -411,20 +388,11 @@ async fn save_price_interval_attestation(
     if !validate_message(validator_public_key, &message.message, &message.signature) {
         return Err(eyre::eyre!("Invalid signature"));
     }
-    let value = message.message.value;
-    let interval_size = message.message.interval_size;
-    let slot_number = message.message.slot_number;
+    let value = message.message.value as i64;
+    let interval_size = message.message.interval_size as i64;
+    let slot_number = message.message.slot_number as i64;
     let signature = &message.signature.to_string();
     let pk_string = validator_public_key.to_string();
-    #[cfg(not(postgres))]
-    let (value, interval_size, slot_number) = (
-        value.to_string(),
-        interval_size.to_string(),
-        slot_number.to_string(),
-    );
-    #[cfg(postgres)]
-    let (value, interval_size, slot_number) =
-        (value as i64, interval_size as i64, slot_number as i64);
 
     // Save price_value_message in DB
     sqlx::query!(
@@ -463,18 +431,9 @@ async fn extend_or_create_aggregate_interval_attestation(
     message: &SignedIntervalInclusionMessage,
     validator_public_key: &PublicKey,
 ) -> eyre::Result<()> {
-    let interval_size = message.message.interval_size;
-    let slot_number = message.message.slot_number;
-    let value = message.message.value;
-    #[cfg(not(postgres))]
-    let (interval_size, slot_number, value) = (
-        interval_size.to_string(),
-        slot_number.to_string(),
-        value.to_string(),
-    );
-    #[cfg(postgres)]
-    let (interval_size, slot_number, value) =
-        (interval_size as i64, slot_number as i64, value as i64);
+    let interval_size = message.message.interval_size as i64;
+    let slot_number = message.message.slot_number as i64;
+    let value = message.message.value as i64;
     let (new_num_validators, mut aggregate_signature, aggregate_public_key) = if let Some(entry) =
         sqlx::query!(
             "

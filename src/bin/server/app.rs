@@ -42,23 +42,12 @@ mod test {
     use crate::attestations::{
         AggregatePriceIntervalEntry, OracleMessage, PriceIntervalEntry, PriceValueEntry,
     };
-    use crate::db::get_db_url;
     use axum::{body::Body, http::Request};
     use bls::{AggregateSignature, SecretKey, Signature};
     use bytes::Bytes;
     use hyper::http::StatusCode;
     use itertools::Itertools;
     use tower::ServiceExt;
-
-    async fn get_db_pool() -> DbPool {
-        let test_db_url = get_db_url();
-        let pool = DbPool::connect(&test_db_url).await.unwrap();
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .expect("Failed to migrate database");
-        pool
-    }
 
     enum TestRequest {
         Get(),

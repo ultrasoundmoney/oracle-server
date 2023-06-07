@@ -14,4 +14,4 @@ Also all commands in the "Cargo" section assume rust and cargo to be installed l
 ### Run tests
 `cargo test`
 ### Run dev server
-`cargo run`
+`cargo run --bin server`

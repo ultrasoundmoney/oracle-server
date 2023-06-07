@@ -434,48 +434,51 @@ async fn extend_or_create_aggregate_interval_attestation(
     let interval_size = message.message.interval_size as i64;
     let slot_number = message.message.slot_number as i64;
     let value = message.message.value as i64;
-    let (new_num_validators, mut aggregate_signature, aggregate_public_key) = if let Some(entry) =
-        sqlx::query!(
-            "
-        SELECT
-            num_validators,
-            aggregate_signature,
-            aggregate_public_key
-        FROM
-            aggregate_interval_attestations
-        WHERE
-            interval_size = $1
-        AND
-            slot_number = $2
-        AND
-            value = $3;
+    let query_result = sqlx::query!(
+        "
+            SELECT
+                num_validators,
+                aggregate_signature,
+                aggregate_public_key
+            FROM
+                aggregate_interval_attestations
+            WHERE
+                interval_size = $1
+            AND
+                slot_number = $2
+            AND
+                value = $3;
         ",
-            interval_size,
-            slot_number,
-            value,
-        )
-        .fetch_optional(db_pool)
-        .await?
-    {
-        (
-            entry.num_validators + 1,
-            AggregateSignature::deserialize(&hex::decode(entry.aggregate_signature)?)
-                .map_err(|_| eyre::eyre!("Invalid aggregate signature in DB"))?,
-            AggregatePublicKey::aggregate(&[
-                PublicKey::deserialize(&hex::decode(entry.aggregate_public_key)?)
-                    .map_err(|_| eyre::eyre!("Invalid aggregate public key in DB"))?,
-                validator_public_key.clone(),
-            ])
-            .map_err(|_| eyre::eyre!("Invalid aggregate public key in DB"))?,
-        )
-    } else {
-        (
-            1,
-            AggregateSignature::infinity(),
-            AggregatePublicKey::aggregate(&[validator_public_key.clone()])
-                .map_err(|_| eyre::eyre!("Invalid aggregate public key"))?,
-        )
-    };
+        interval_size,
+        slot_number,
+        value,
+    )
+    .fetch_optional(db_pool)
+    .await?;
+
+    let (new_num_validators, mut aggregate_signature, aggregate_public_key) =
+        if let Some(entry) = query_result {
+            // Aggregate new message into existing aggregates if it is not the first one
+            (
+                entry.num_validators + 1,
+                AggregateSignature::deserialize(&hex::decode(entry.aggregate_signature)?)
+                    .map_err(|_| eyre::eyre!("Invalid aggregate signature in DB"))?,
+                AggregatePublicKey::aggregate(&[
+                    PublicKey::deserialize(&hex::decode(entry.aggregate_public_key)?)
+                        .map_err(|_| eyre::eyre!("Invalid aggregate public key in DB"))?,
+                    validator_public_key.clone(),
+                ])
+                .map_err(|_| eyre::eyre!("Invalid aggregate public key in DB"))?,
+            )
+        } else {
+            // Starting values if this is the first message to be submitted
+            (
+                1,
+                AggregateSignature::infinity(),
+                AggregatePublicKey::aggregate(&[validator_public_key.clone()])
+                    .map_err(|_| eyre::eyre!("Invalid aggregate public key"))?,
+            )
+        };
 
     aggregate_signature.add_assign(&message.signature);
     let new_aggregate_signature = hex::encode(aggregate_signature.serialize());

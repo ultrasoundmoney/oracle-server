@@ -1,4 +1,3 @@
--- Add migration script here
 CREATE TABLE price_value_attestations (
     validator_public_key text NOT NULL,
     slot_number BIGINT NOT NULL,

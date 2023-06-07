@@ -3,7 +3,29 @@ name = "oracle"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-tokio = { version = "1", features = ["full"] }
+axum = "0.6.12"
+serde = { version = "1.0.159", features = ["derive"] }
+sqlx = { version = "0.6.3", features = [
+  "json",
+  "offline",
+  "postgres",
+  "runtime-tokio-native-tls",
+] }
+tokio = { version = "1.27.0", features = ["full"] }
+tracing = "0.1.37"
+tracing-subscriber = "0.3.16"
+bls = { git = "https://github.com/ckoopmann/ethereum_bls" }
+eth2_ssz_derive = "0.3.0"
+ethereum_ssz = "0.5.2"
+sha3 = "0.10.8"
+eyre = "0.6.8"
+hex = "0.4.3"
+itertools = "0.10.5"
+bytes = "1.4.0"
+
+[dev-dependencies]
+hyper = { version = "0.14", features = ["full"] }
+serde_json = "1.0"
+tower-http = { version = "0.4.0", features = ["trace"] }
+tower = { version = "0.4", features = ["util"] }

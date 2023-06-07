@@ -1,0 +1,1 @@
+DROP TABLE price_interval_attestations;

@@ -10,12 +10,12 @@ use axum::{
 };
 use std::sync::Arc;
 
-pub async fn get_app() -> Router {
+pub async fn get_router() -> Router {
     let db_pool = get_db_pool().await;
-    get_app_with_db_pool(db_pool)
+    get_router_with_db_pool(db_pool)
 }
 
-fn get_app_with_db_pool(db_pool: DbPool) -> Router {
+fn get_router_with_db_pool(db_pool: DbPool) -> Router {
     let shared_state = Arc::new(AppState { db_pool });
     Router::new()
         .route(
@@ -83,7 +83,7 @@ mod test {
         }
 
         async fn send_request(&self, request: TestRequest, uri: &str, expected_code: u16) -> Bytes {
-            let app = get_app_with_db_pool(self.db_pool.clone());
+            let app = get_router_with_db_pool(self.db_pool.clone());
             let req = match request {
                 TestRequest::Get() => Request::builder()
                     .uri(uri)

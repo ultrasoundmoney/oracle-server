@@ -8,7 +8,7 @@ mod state;
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
-    let app = app::get_app().await;
+    let app = app::get_router().await;
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     tracing::info!("Listening on {}", addr);
     axum::Server::bind(&addr)

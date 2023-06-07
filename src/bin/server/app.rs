@@ -46,6 +46,7 @@ mod test {
     use axum::{body::Body, http::Request};
     use bls::{AggregateSignature, SecretKey, Signature};
     use bytes::Bytes;
+    use hyper::http::StatusCode;
     use itertools::Itertools;
     use tower::ServiceExt;
 
@@ -72,17 +73,22 @@ mod test {
             TestApp { db_pool }
         }
 
-        pub async fn get(&self, uri: &str, expected_code: u16) -> Bytes {
+        pub async fn get_expect(&self, uri: &str, expected_code: StatusCode) -> Bytes {
             self.send_request(TestRequest::Get(), uri, expected_code)
                 .await
         }
 
-        pub async fn post(&self, uri: &str, body: Body, expected_code: u16) -> Bytes {
+        pub async fn post_expect(&self, uri: &str, body: Body, expected_code: StatusCode) -> Bytes {
             self.send_request(TestRequest::Post(body), uri, expected_code)
                 .await
         }
 
-        async fn send_request(&self, request: TestRequest, uri: &str, expected_code: u16) -> Bytes {
+        async fn send_request(
+            &self,
+            request: TestRequest,
+            uri: &str,
+            expected_code: StatusCode,
+        ) -> Bytes {
             let app = get_router_with_db_pool(self.db_pool.clone());
             let req = match request {
                 TestRequest::Get() => Request::builder()
@@ -99,7 +105,7 @@ mod test {
             };
 
             let response = app.oneshot(req).await.unwrap();
-            assert_eq!(response.status().as_u16(), expected_code);
+            assert_eq!(response.status(), expected_code);
             let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
             body
         }
@@ -137,16 +143,16 @@ mod test {
         let test_app = TestApp::new(db_pool).await;
         for message in messages.iter() {
             test_app
-                .post(
+                .post_expect(
                     "/post_oracle_message",
                     Body::from(serde_json::to_string(&message).unwrap()),
-                    200,
+                    StatusCode::OK,
                 )
                 .await;
         }
 
         let response = test_app
-            .get("/aggregate_price_interval_attestations", 200)
+            .get_expect("/aggregate_price_interval_attestations", StatusCode::OK)
             .await;
         let entries: Vec<AggregatePriceIntervalEntry> = serde_json::from_slice(&response).unwrap();
         assert_eq!(
@@ -198,14 +204,20 @@ mod test {
         let test_message = get_test_message();
         let test_app = TestApp::new(db_pool).await;
 
-        let response = test_app.get("/price_interval_attestations", 200).await;
+        let response = test_app
+            .get_expect("/price_interval_attestations", StatusCode::OK)
+            .await;
         let entries: Vec<PriceIntervalEntry> = serde_json::from_slice(&response).unwrap();
         assert_eq!(entries.len(), 0);
 
         let body = Body::from(serde_json::to_string(&test_message).unwrap());
-        test_app.post("/post_oracle_message", body, 200).await;
+        test_app
+            .post_expect("/post_oracle_message", body, StatusCode::OK)
+            .await;
 
-        let response = test_app.get("/price_value_attestations", 200).await;
+        let response = test_app
+            .get_expect("/price_value_attestations", StatusCode::OK)
+            .await;
         let entries: Vec<PriceValueEntry> = serde_json::from_slice(&response).unwrap();
 
         assert_eq!(entries.len(), 1);
@@ -222,7 +234,9 @@ mod test {
             test_message.validator_public_key.to_string()
         );
 
-        let response = test_app.get("/price_interval_attestations", 200).await;
+        let response = test_app
+            .get_expect("/price_interval_attestations", StatusCode::OK)
+            .await;
         let entries: Vec<PriceIntervalEntry> = serde_json::from_slice(&response).unwrap();
         assert_eq!(
             entries.len(),
@@ -243,7 +257,7 @@ mod test {
         }
 
         let response = test_app
-            .get("/aggregate_price_interval_attestations", 200)
+            .get_expect("/aggregate_price_interval_attestations", StatusCode::OK)
             .await;
         let entries: Vec<AggregatePriceIntervalEntry> = serde_json::from_slice(&response).unwrap();
         assert_eq!(
@@ -277,7 +291,9 @@ mod test {
             assert_eq!(entry.num_validators, 1);
         }
 
-        let response = test_app.get("/price_aggregate", 200).await;
+        let response = test_app
+            .get_expect("/price_aggregate", StatusCode::OK)
+            .await;
         let data: AggregatePriceIntervalEntry = serde_json::from_slice(&response).unwrap();
         assert_eq!(
             data.slot_number,
@@ -287,7 +303,7 @@ mod test {
         );
 
         let response = test_app
-            .get(
+            .get_expect(
                 &format!(
                     "/price_aggregate?slot_number={}&interval_size={}",
                     test_message.value_message.message.slot_number,
@@ -295,7 +311,7 @@ mod test {
                         .message
                         .interval_size
                 ),
-                200,
+                StatusCode::OK,
             )
             .await;
 
@@ -313,10 +329,16 @@ mod test {
         );
 
         test_app
-            .get(&format!("/price_aggregate?slot_number={}", 1), 500)
+            .get_expect(
+                &format!("/price_aggregate?slot_number={}", 1),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )
             .await;
         test_app
-            .get(&format!("/price_aggregate?interval_size={}", 1), 500)
+            .get_expect(
+                &format!("/price_aggregate?interval_size={}", 1),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )
             .await;
     }
 
@@ -329,13 +351,19 @@ mod test {
             signature_from_random_signer(&test_message.value_message.message);
 
         let body = Body::from(serde_json::to_string(&test_message).unwrap());
-        test_app.post("/post_oracle_message", body, 400).await;
+        test_app
+            .post_expect("/post_oracle_message", body, StatusCode::BAD_REQUEST)
+            .await;
 
-        let body = test_app.get("/price_value_attestations", 200).await;
+        let body = test_app
+            .get_expect("/price_value_attestations", StatusCode::OK)
+            .await;
         let entries: Vec<PriceValueEntry> = serde_json::from_slice(&body).unwrap();
         assert_eq!(entries.len(), 0);
 
-        let body = test_app.get("/price_interval_attestations", 200).await;
+        let body = test_app
+            .get_expect("/price_interval_attestations", StatusCode::OK)
+            .await;
         let entries: Vec<PriceIntervalEntry> = serde_json::from_slice(&body).unwrap();
         // Will not save any interval messages even though they are valid
         // TODO: Review if this is intended behaviour
@@ -352,15 +380,21 @@ mod test {
             signature_from_random_signer(&test_message.value_message.message);
 
         let body = Body::from(serde_json::to_string(&test_message).unwrap());
-        test_app.post("/post_oracle_message", body, 400).await;
+        test_app
+            .post_expect("/post_oracle_message", body, StatusCode::BAD_REQUEST)
+            .await;
 
-        let value_response = test_app.get("/price_value_attestations", 200).await;
+        let value_response = test_app
+            .get_expect("/price_value_attestations", StatusCode::OK)
+            .await;
         let entries: Vec<PriceValueEntry> = serde_json::from_slice(&value_response).unwrap();
         // Note that it will still save the the value message, but not the interval message
         // TODO: Review if this is intended behaviour
         assert_eq!(entries.len(), 1);
 
-        let interval_response = test_app.get("/price_interval_attestations", 200).await;
+        let interval_response = test_app
+            .get_expect("/price_interval_attestations", StatusCode::OK)
+            .await;
         let entries: Vec<PriceIntervalEntry> = serde_json::from_slice(&interval_response).unwrap();
         // Saves all messages up to the invalid one
         // TODO: Review if this is intended behaviour

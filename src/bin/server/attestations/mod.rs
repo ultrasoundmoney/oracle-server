@@ -319,14 +319,20 @@ pub async fn post_oracle_message(
     // TODO: Improve error handling instead of returning "BAD REQUEST" for any kind of error
     save_price_value_attestation(db_pool, &message.value_message, &validator_public_key)
         .await
-        .map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
+        .map_err(|err| {
+            tracing::error!("Error saving price value attestation: {:?}", err);
+            axum::http::StatusCode::BAD_REQUEST
+        })?;
     save_price_interval_attestations(
         db_pool,
         &message.interval_inclusion_messages,
         &validator_public_key,
     )
     .await
-    .map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
+    .map_err(|err| {
+        tracing::error!("Error saving price interval attestation: {:?}", err);
+        axum::http::StatusCode::BAD_REQUEST
+    })?;
     Ok(())
 }
 

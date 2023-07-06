@@ -313,7 +313,7 @@ pub async fn post_oracle_message(
     State(state): State<Arc<AppState>>,
     Json(message): Json<OracleMessage>,
 ) -> Result<(), axum::http::StatusCode> {
-    tracing::info!("Received oracle message: {:?}", message);
+    tracing::info!("Received oracle message");
     let db_pool = &state.db_pool;
     let validator_public_key = message.validator_public_key;
     // TODO: Improve error handling instead of returning "BAD REQUEST" for any kind of error

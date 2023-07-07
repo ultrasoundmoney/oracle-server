@@ -2,7 +2,7 @@ use crate::attestations::{
     get_aggregate_price_interval_attestations, get_price_aggregate,
     get_price_interval_attestations, get_price_value_attestations, post_oracle_message,
 };
-use crate::db::{get_db_pool, DbPool};
+use crate::db::DbPool;
 use crate::state::AppState;
 use axum::{
     routing::{get, post},
@@ -10,12 +10,7 @@ use axum::{
 };
 use std::sync::Arc;
 
-pub async fn get_router() -> Router {
-    let db_pool = get_db_pool().await;
-    get_router_with_db_pool(db_pool)
-}
-
-fn get_router_with_db_pool(db_pool: DbPool) -> Router {
+pub fn get_router_with_db_pool(db_pool: DbPool) -> Router {
     let shared_state = Arc::new(AppState { db_pool });
     Router::new()
         .route(
